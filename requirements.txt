@@ -38,11 +38,9 @@ pyarrow==25.0.1
 pycparser==3.0
 pydeck==0.9.3
 pyparsing==3.3.2
-pypiwin32==223
 python-dateutil==2.9.0.post0
 python-multipart==0.0.32
 pytz==2026.3.post1
-pywin32==312
 referencing==0.37.0
 requests==2.34.2
 rpds-py==2026.6.3
@@ -59,5 +57,4 @@ urllib3==2.8.0
 uvicorn==0.53.0
 watchdog==6.0.0
 websockets==16.1.1
-win10toast==0.9
 yfinance==1.7.0
