@@ -20,12 +20,35 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
+# 🔐 BIST Terminal şifreli giriş
+def check_password():
+    if st.session_state.get("giris_yapildi"):
+        return True
+
+    st.title("🔒 BIST Terminal")
+    st.write("Devam etmek için şifrenizi girin.")
+
+    password = st.text_input("Şifre", type="password")
+
+    if st.button("Giriş Yap"):
+        if password == st.secrets["APP_PASSWORD"]:
+            st.session_state["giris_yapildi"] = True
+            st.rerun()
+        else:
+            st.error("Şifre yanlış.")
+
+    return False
+
+
+if not check_password():
+    st.stop()
+
+
 # 15 saniyede bir yenile
 st_autorefresh(
     interval=15000,
     key="bist_refresh"
 )
-
 
 # =========================================================
 # TASARIM
