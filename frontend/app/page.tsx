@@ -108,7 +108,11 @@ export default function Home(){
       const app=getApps().length?getApps()[0]:initializeApp(firebaseConfig);
       const messaging=getMessaging(app);
 
-      const registration=await navigator.serviceWorker.register('/firebase-messaging-sw.js');
+      await navigator.serviceWorker.register('/firebase-messaging-sw.js');
+
+      // Service worker ilk kayıtta hemen aktif olmayabilir.
+      // Firebase token istemeden önce aktif hale gelmesini bekliyoruz.
+      const registration=await navigator.serviceWorker.ready;
 
       const token=await getToken(messaging,{
         vapidKey: process.env.NEXT_PUBLIC_FIREBASE_VAPID_KEY,
