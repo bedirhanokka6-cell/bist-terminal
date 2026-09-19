@@ -79,6 +79,16 @@ export default function Home(){
   const stateColor=stock?.technical?.color || '#f8bd39';
   const selectedWatch=useMemo(()=>watch.find(x=>x.symbol===symbol),[watch,symbol]);
 
+  const dataStatus=stock?.data_status ?? '—';
+  const dataAge=stock?.data_age_minutes;
+  const dataSource=stock?.data_source ?? '—';
+  const dataTime=stock?.last_data_time ? formatDataTime(stock.last_data_time) : '—';
+  const dataStatusColor=
+    dataStatus==='GUNCEL' ? '#2ecc71' :
+    dataStatus==='GECIKMELI' ? '#f8bd39' :
+    dataStatus==='ESKI' ? '#ff5c5c' :
+    '#9aa4b2';
+
   return <main className="appShell">
     <aside className="sidebar">
       <div className="brand">▮▮▮ <b>BIST TERMINAL</b></div><h3>BIST 30</h3>
@@ -90,7 +100,22 @@ export default function Home(){
     <section className="mainArea">
       <header className="topnav"><div className="brand">▮▮▮ <b>BIST TERMINAL</b></div><nav><span>Ana Sayfa</span><span className="active">Hisse Analizi</span><span>BIST 30 Tarayıcı</span><span>Haberler (KAP)</span><span>Takip Listesi</span><span>Sinyal Geçmişi</span></nav><div className="market">● Piyasa Takip</div></header>
       <div className="periods">{periods.map(p=><button className={period===p?'active':''} onClick={()=>setPeriod(p)} key={p}>{p}</button>)}</div>
-      <section className="company"><div className="badge">{symbol.slice(0,3)}</div><div><h1>{symbol}</h1><p>{symbol}.IS • Borsa İstanbul • Teknik Analiz</p></div></section>
+      <section className="company">
+        <div className="badge">{symbol.slice(0,3)}</div>
+        <div>
+          <h1>{symbol}</h1>
+          <p>{symbol}.IS • Borsa İstanbul • Teknik Analiz</p>
+          <div style={{display:'flex',gap:'8px',flexWrap:'wrap',alignItems:'center',marginTop:'6px',fontSize:'12px',color:'#9aa4b2'}}>
+            <span>Veri: {dataSource}</span>
+            <span>•</span>
+            <span>Son veri: {dataTime}</span>
+            <span>•</span>
+            <span>{dataAge==null?'Gecikme: —':`Gecikme: ${Number(dataAge).toFixed(1)} dk`}</span>
+            <span>•</span>
+            <b style={{color:dataStatusColor}}>{dataStatus}</b>
+          </div>
+        </div>
+      </section>
 
       <div className="workspace">
         <div className="charts">
@@ -142,3 +167,4 @@ function Row({k,v,green,red}:{k:string;v:any;green?:boolean;red?:boolean}){retur
 function Metric({k,v}:{k:string;v:string}){return <div className="metric"><span>{k}</span><b>{v}</b></div>}
 function signalClass(v:string){return v==='AL'?'buy':v==='SAT'?'sell':'wait'}
 function formatDate(v:string|null){if(!v)return '—';try{return new Intl.DateTimeFormat('tr-TR',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'}).format(new Date(v))}catch{return v}}
+function formatDataTime(v:string){try{return new Intl.DateTimeFormat('tr-TR',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit'}).format(new Date(v))}catch{return v}}
