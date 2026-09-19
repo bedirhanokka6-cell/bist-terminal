@@ -2,6 +2,7 @@ from fastapi import FastAPI, HTTPException, Depends, Query
 from fastapi.middleware.cors import CORSMiddleware
 import numpy as np
 import pandas as pd
+import yfinance as yf
 from datetime import datetime, time
 from zoneinfo import ZoneInfo
 from sqlalchemy.orm import Session
@@ -156,21 +157,70 @@ def health():
 
 @app.get('/api/bist30')
 def bist30():
+    # 30 hisseyi tek tek indirmek yerine tek toplu istekte al.
+    # Bu, özellikle Render üzerinde sol BIST30 listesinin çok daha hızlı dolmasını sağlar.
+    tickers = [s + '.IS' for s in BIST30]
     rows = []
-    for s in BIST30:
-        try:
-            d = load_chart(s, '5G')
-            if len(d) < 2:
+
+    try:
+        data = yf.download(
+            tickers=tickers,
+            period='5d',
+            interval='15m',
+            auto_adjust=False,
+            progress=False,
+            threads=True,
+            group_by='ticker',
+        )
+
+        for s in BIST30:
+            ticker = s + '.IS'
+            try:
+                if isinstance(data.columns, pd.MultiIndex):
+                    if ticker not in data.columns.get_level_values(0):
+                        continue
+                    d = data[ticker].dropna(how='all')
+                else:
+                    # Tek sembol benzeri dönüş ihtimaline karşı.
+                    d = data.dropna(how='all')
+
+                if 'Close' not in d.columns:
+                    continue
+
+                closes = pd.to_numeric(d['Close'], errors='coerce').dropna()
+                if len(closes) < 2:
+                    continue
+
+                p = float(closes.iloc[-1])
+                prev = float(closes.iloc[-2])
+                rows.append({
+                    'symbol': s,
+                    'price': p,
+                    'change_pct': ((p / prev) - 1) * 100 if prev else 0,
+                })
+            except Exception:
                 continue
-            p = float(d['Close'].iloc[-1])
-            prev = float(d['Close'].iloc[-2])
-            rows.append({
-                'symbol': s,
-                'price': p,
-                'change_pct': ((p / prev) - 1) * 100 if prev else 0
-            })
-        except Exception:
-            continue
+
+    except Exception:
+        # Toplu istek başarısız olursa eski yöntem yedek olarak çalışsın.
+        for s in BIST30:
+            try:
+                d = load_chart(s, '5G')
+                if len(d) < 2:
+                    continue
+                p = float(d['Close'].iloc[-1])
+                prev = float(d['Close'].iloc[-2])
+                rows.append({
+                    'symbol': s,
+                    'price': p,
+                    'change_pct': ((p / prev) - 1) * 100 if prev else 0,
+                })
+            except Exception:
+                continue
+
+    # Her zaman BIST30 sırasını koru.
+    order = {s: i for i, s in enumerate(BIST30)}
+    rows.sort(key=lambda x: order.get(x['symbol'], 999))
     return rows
 
 @app.get('/api/stock/{symbol}')
