@@ -20,6 +20,7 @@ app.add_middleware(
         'http://localhost:3001',
         'http://127.0.0.1:3000',
         'http://127.0.0.1:3001',
+        'https://bist-terminal-8z507aj5e-a-7401.vercel.app',
     ],
     allow_credentials=True,
     allow_methods=['*'],
