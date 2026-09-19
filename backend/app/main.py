@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Depends, Query
+from fastapi import FastAPI, HTTPException, Depends, Query, Header
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import numpy as np
@@ -590,7 +590,7 @@ def _batch_alert_scan_data():
 
 @app.post('/api/alerts/scan')
 def scan_and_notify(
-    x_alert_key: str | None = None,
+    x_alert_key: str | None = Header(default=None, alias='x-alert-key'),
     db: Session = Depends(get_db),
 ):
     # GitHub Actions dışından rastgele tetiklenmeyi engelle.
