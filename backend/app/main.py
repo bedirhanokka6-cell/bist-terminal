@@ -977,3 +977,216 @@ def backtest_bist30(
         'best_symbols_5d': by_symbol[:10],
         'symbol_coverage': symbol_summary,
     }
+
+
+# ==========================================================
+# V2 SECICI TEKNIK MODEL + WALK-FORWARD BACKTEST
+# ==========================================================
+
+@app.get('/api/analysis/v2/{symbol}')
+def stock_analysis_v2(symbol: str):
+    from .analysis_v2 import explain_latest_v2
+
+    symbol = symbol.upper().replace('.IS', '')
+    if symbol not in BIST30:
+        raise HTTPException(404, 'BIST30 içinde hisse bulunamadı')
+
+    d = load_chart(symbol, '1Y')
+    if d is None or len(d) < 220:
+        raise HTTPException(503, 'V2 analiz için yeterli veri yok')
+
+    return {
+        'symbol': symbol,
+        'model': 'quality_v2',
+        **explain_latest_v2(d),
+        'note': 'Bu teknik koşul analizidir; yatırım tavsiyesi değildir.'
+    }
+
+
+@app.get('/api/backtest/v2')
+def backtest_v2(
+    test_days: int = Query(default=504, ge=252, le=756),
+    cost_bps: int = Query(default=20, ge=0, le=100),
+    cooldown_days: int = Query(default=5, ge=1, le=20),
+):
+    """
+    Daha gerçekçi event-based long-only test:
+    - Current BIST30 universe
+    - Günlük veri
+    - Sadece yeni AL oluştuğu gün event sayılır
+    - Aynı hissede cooldown boyunca tekrar sayılmaz
+    - Maliyet net getiriden düşülür
+    - Dönem ikiye ayrılır: development / validation
+    """
+    from .analysis_v2 import indicators_v2, quality_score_series
+
+    horizons = [1, 3, 5, 10]
+    tickers = [s + '.IS' for s in BIST30]
+    roundtrip_cost_pct = cost_bps / 100.0
+
+    try:
+        raw = yf.download(
+            tickers=tickers,
+            period='5y',
+            interval='1d',
+            auto_adjust=False,
+            progress=False,
+            threads=True,
+            group_by='ticker',
+        )
+    except Exception as exc:
+        raise HTTPException(503, f'V2 backtest verisi alınamadı: {exc}')
+
+    events = []
+
+    for symbol in BIST30:
+        ticker = symbol + '.IS'
+        try:
+            if isinstance(raw.columns, pd.MultiIndex):
+                if ticker not in raw.columns.get_level_values(0):
+                    continue
+                d = raw[ticker].copy()
+            else:
+                d = raw.copy()
+
+            d = d.dropna(subset=['Open','High','Low','Close'])
+            if len(d) < 300:
+                continue
+
+            a = quality_score_series(indicators_v2(d))
+
+            # Son test_days + gelecek horizonlar.
+            start_pos = max(220, len(a) - test_days)
+            end_pos = len(a) - max(horizons)
+
+            last_event_pos = -10_000
+            prev_buy = False
+
+            for pos in range(start_pos, end_pos):
+                row = a.iloc[pos]
+                is_buy = bool(row['QUALITY_BUY'])
+
+                # Sadece yeni sinyal oluşumu + cooldown.
+                new_event = is_buy and (not prev_buy) and (pos - last_event_pos >= cooldown_days)
+                prev_buy = is_buy
+
+                if not new_event:
+                    continue
+
+                entry = float(row['Close'])
+                event = {
+                    'symbol': symbol,
+                    'date': pd.Timestamp(a.index[pos]).date().isoformat(),
+                    'score': float(row['QUALITY_SCORE']),
+                    'entry': entry,
+                    'returns': {},
+                }
+
+                for h in horizons:
+                    exit_price = float(a['Close'].iloc[pos+h])
+                    gross = ((exit_price / entry) - 1.0) * 100.0
+                    net = gross - roundtrip_cost_pct
+                    event['returns'][h] = net
+
+                events.append(event)
+                last_event_pos = pos
+
+        except Exception:
+            continue
+
+    if not events:
+        raise HTTPException(503, 'V2 model hiç sinyal üretemedi')
+
+    edf = pd.DataFrame([{
+        'symbol': e['symbol'],
+        'date': e['date'],
+        'score': e['score'],
+        **{f'ret_{h}': e['returns'][h] for h in horizons}
+    } for e in events])
+
+    edf['date'] = pd.to_datetime(edf['date'])
+    edf = edf.sort_values('date').reset_index(drop=True)
+
+    # Tarihe göre %50 / %50 ayır. Aynı günkü tüm hisseler aynı tarafta kalsın.
+    unique_dates = sorted(edf['date'].dt.date.unique())
+    split_i = max(1, len(unique_dates)//2)
+    split_date = pd.Timestamp(unique_dates[split_i])
+
+    edf['segment'] = np.where(edf['date'] < split_date, 'development', 'validation')
+
+    def summarize(frame):
+        out = []
+        for h in horizons:
+            s = frame[f'ret_{h}'].dropna()
+            if not len(s):
+                continue
+            out.append({
+                'horizon_days': h,
+                'events': int(len(s)),
+                'wins': int((s > 0).sum()),
+                'losses': int((s <= 0).sum()),
+                'success_rate_pct': round(float((s > 0).mean()*100), 2),
+                'avg_net_return_pct': round(float(s.mean()), 3),
+                'median_net_return_pct': round(float(s.median()), 3),
+            })
+        return out
+
+    # Skor bandı analizi: daha yüksek skor gerçekten daha kaliteli mi?
+    score_buckets = []
+    temp = edf.copy()
+    temp['score_bucket'] = pd.cut(
+        temp['score'],
+        bins=[7.24, 7.74, 8.24, 8.74, 10.01],
+        labels=['7.25-7.74','7.75-8.24','8.25-8.74','8.75+'],
+        include_lowest=True,
+    )
+    for bucket, g in temp[temp['segment']=='validation'].groupby('score_bucket', observed=True):
+        if not len(g):
+            continue
+        s = g['ret_5'].dropna()
+        score_buckets.append({
+            'score_bucket': str(bucket),
+            'events': int(len(s)),
+            'success_rate_5d_pct': round(float((s > 0).mean()*100), 2) if len(s) else None,
+            'avg_net_return_5d_pct': round(float(s.mean()), 3) if len(s) else None,
+        })
+
+    # Validation tarafında hisse bazlı 5 günlük görünüm.
+    by_symbol = []
+    vg = edf[edf['segment']=='validation']
+    for symbol, g in vg.groupby('symbol'):
+        s = g['ret_5'].dropna()
+        if len(s) < 3:
+            continue
+        by_symbol.append({
+            'symbol': symbol,
+            'events': int(len(s)),
+            'success_rate_5d_pct': round(float((s > 0).mean()*100), 2),
+            'avg_net_return_5d_pct': round(float(s.mean()), 3),
+        })
+    by_symbol.sort(key=lambda x: (x['events'] >= 5, x['success_rate_5d_pct'], x['avg_net_return_5d_pct']), reverse=True)
+
+    return {
+        'ok': True,
+        'model': 'quality_v2_long_only',
+        'tested_current_bist30_symbols': int(edf['symbol'].nunique()),
+        'event_count': int(len(edf)),
+        'split_date': split_date.date().isoformat(),
+        'settings': {
+            'test_days': test_days,
+            'roundtrip_cost_bps': cost_bps,
+            'cooldown_days': cooldown_days,
+            'signal': 'QUALITY_SCORE >= 7.25 + trend hard-gate',
+            'event_rule': 'yalnızca yeni AL oluştuğunda event; ardışık AL günleri ayrı sinyal sayılmaz',
+        },
+        'development': summarize(edf[edf['segment']=='development']),
+        'validation': summarize(edf[edf['segment']=='validation']),
+        'validation_score_buckets': score_buckets,
+        'validation_best_symbols_5d': by_symbol[:10],
+        'caveats': [
+            'Current BIST30 composition geçmişe uygulanır; survivorship bias olabilir.',
+            'Yahoo Finance verisi kullanılır; resmi gerçek zamanlı BIST verisi değildir.',
+            'Backtest geçmiş performanstır; geleceği garanti etmez.',
+            'Haber/KAP faktörü bu testte henüz yoktur; önce teknik çekirdek ayrı doğrulanır.',
+        ],
+    }
