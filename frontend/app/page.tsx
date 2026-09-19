@@ -29,6 +29,7 @@ export default function Home(){
   const [signalMessage,setSignalMessage]=useState('');
   const [pushStatus,setPushStatus]=useState('Bildirim kapalı');
   const [pushToken,setPushToken]=useState('');
+  const [mobileMenuOpen,setMobileMenuOpen]=useState(false);
 
   const loadSignals=async()=>{
     try{
@@ -163,15 +164,16 @@ export default function Home(){
     '#9aa4b2';
 
   return <main className="appShell">
-    <aside className="sidebar">
-      <div className="brand">▮▮▮ <b>BIST TERMINAL</b></div><h3>BIST 30</h3>
+    <aside className={`sidebar ${mobileMenuOpen?'open':''}`}>
+      <div className="sidebarTop"><div className="brand">▮▮▮ <b>BIST TERMINAL</b></div><button className="mobileCloseBtn" onClick={()=>setMobileMenuOpen(false)} aria-label="Menüyü kapat">✕</button></div><h3>BIST 30</h3>
       <div className="watchHead"><span>Hisse</span><span>Fiyat</span><span>Değişim</span></div>
-      <div className="watchList">{watch.map(x=><button key={x.symbol} className={`watchRow ${x.change_pct>=0?'up':'down'} ${x.symbol===symbol?'active':''}`} onClick={()=>setSymbol(x.symbol)}><span><i>{x.change_pct>=0?'▲':'▼'}</i>{x.symbol}</span><b>{x.price.toFixed(2)}</b><em>{x.change_pct>=0?'+':''}{x.change_pct.toFixed(2)}%</em></button>)}</div>
+      <div className="watchList">{watch.map(x=><button key={x.symbol} className={`watchRow ${x.change_pct>=0?'up':'down'} ${x.symbol===symbol?'active':''}`} onClick={()=>{setSymbol(x.symbol);setMobileMenuOpen(false)}}><span><i>{x.change_pct>=0?'▲':'▼'}</i>{x.symbol}</span><b>{x.price.toFixed(2)}</b><em>{x.change_pct>=0?'+':''}{x.change_pct.toFixed(2)}%</em></button>)}</div>
       <small>Veriler ücretsiz kaynaklardan gelir; gerçek zamanlı olduğu garanti edilmez.</small>
     </aside>
+    {mobileMenuOpen?<button className="mobileBackdrop" onClick={()=>setMobileMenuOpen(false)} aria-label="Menüyü kapat"/>:null}
 
     <section className="mainArea">
-      <header className="topnav"><div className="brand">▮▮▮ <b>BIST TERMINAL</b></div><nav><span>Ana Sayfa</span><span className="active">Hisse Analizi</span><span>BIST 30 Tarayıcı</span><span>Haberler (KAP)</span><span>Takip Listesi</span><span>Sinyal Geçmişi</span></nav><div style={{display:'flex',gap:'8px',alignItems:'center'}}>
+      <header className="topnav"><button className="mobileMenuBtn" onClick={()=>setMobileMenuOpen(true)}>☰ BIST 30</button><div className="brand">▮▮▮ <b>BIST TERMINAL</b></div><nav><span>Ana Sayfa</span><span className="active">Hisse Analizi</span><span>BIST 30 Tarayıcı</span><span>Haberler (KAP)</span><span>Takip Listesi</span><span>Sinyal Geçmişi</span></nav><div style={{display:'flex',gap:'8px',alignItems:'center'}}>
           <button onClick={enableNotifications} style={{padding:'7px 10px',borderRadius:'7px',border:'1px solid #24445f',background:'#123451',color:'#fff',cursor:'pointer'}}>
             🔔 Bildirimleri Aç
           </button>
@@ -214,7 +216,7 @@ export default function Home(){
 
       <div className="metricGrid"><Metric k="Teknik Skor" v={`${score.toFixed?.(1) ?? score}/10`}/><Metric k="RSI" v={fmt(last?.rsi)}/><Metric k="Hacim Oranı" v={last?.vol_ratio==null?'—':`${Number(last.vol_ratio).toFixed(2)}x`}/><Metric k="ATR" v={fmt(last?.atr)}/><Metric k="Destek" v={fmt(stock?.support)}/><Metric k="Direnç" v={fmt(stock?.resistance)}/></div>
 
-      <section className="panel scanner"><div className="sectionTitle"><div><h2>BIST 30 Fırsat Tarayıcı</h2><p>Teknik skoru yüksek hisseleri hızlıca görün.</p></div></div><div className="table"><div className="tr head"><span>Hisse</span><span>Fiyat</span><span>Değişim</span><span>Skor</span><span>RSI</span><span>Hacim</span><span>Destek</span><span>Direnç</span><span>Durum</span></div>{scan.map(x=><div className="tr" key={x.symbol} onClick={()=>setSymbol(x.symbol)}><span><b>{x.symbol}</b></span><span>{x.price.toFixed(2)} ₺</span><span className={x.change_pct>=0?'green':'red'}>{x.change_pct>=0?'+':''}{x.change_pct.toFixed(2)}%</span><span>{x.score.toFixed(1)}</span><span>{x.rsi?.toFixed?.(1) ?? '—'}</span><span>{x.vol_ratio?.toFixed?.(2) ?? '—'}x</span><span>{x.support.toFixed(2)}</span><span>{x.resistance.toFixed(2)}</span><span>{x.state}</span></div>)}</div></section>
+      <section className="panel scanner"><div className="sectionTitle"><div><h2>BIST 30 Fırsat Tarayıcı</h2><p>Teknik skoru yüksek hisseleri hızlıca görün.</p></div></div><div className="table"><div className="tr head"><span>Hisse</span><span>Fiyat</span><span>Değişim</span><span>Skor</span><span>RSI</span><span>Hacim</span><span>Destek</span><span>Direnç</span><span>Durum</span></div>{scan.map(x=><div className="tr" key={x.symbol} onClick={()=>{setSymbol(x.symbol);setMobileMenuOpen(false)}}><span><b>{x.symbol}</b></span><span>{x.price.toFixed(2)} ₺</span><span className={x.change_pct>=0?'green':'red'}>{x.change_pct>=0?'+':''}{x.change_pct.toFixed(2)}%</span><span>{x.score.toFixed(1)}</span><span>{x.rsi?.toFixed?.(1) ?? '—'}</span><span>{x.vol_ratio?.toFixed?.(2) ?? '—'}x</span><span>{x.support.toFixed(2)}</span><span>{x.resistance.toFixed(2)}</span><span>{x.state}</span></div>)}</div></section>
 
       <section className="panel signalHistory">
         <div className="signalHeader">

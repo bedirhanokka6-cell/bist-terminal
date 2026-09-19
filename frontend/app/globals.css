@@ -1,4 +1,210 @@
-*{box-sizing:border-box}html,body{margin:0;background:#06111d;color:#eef6ff;font-family:Inter,system-ui,-apple-system,Segoe UI,sans-serif}button{font:inherit}.appShell{display:grid;grid-template-columns:250px minmax(0,1fr);min-height:100vh}.sidebar{position:sticky;top:0;height:100vh;background:#071522;border-right:1px solid #173149;padding:14px 10px;overflow:hidden}.brand{font-weight:900;color:#6f7dff;white-space:nowrap}.brand b{color:#eef6ff}.sidebar h3{font-size:15px;margin:16px 5px 8px}.watchHead,.watchRow{display:grid;grid-template-columns:minmax(72px,1fr) 70px 72px;gap:5px;align-items:center}.watchHead{font-size:10px;color:#7f98b2;padding:0 7px 5px}.watchHead span:nth-child(n+2){text-align:right}.watchList{height:calc(100vh - 145px);overflow:auto;padding-right:2px}.watchRow{width:100%;border:1px solid #12324b;background:#081827;border-radius:6px;padding:6px 7px;margin:3px 0;color:#dce9f6;cursor:pointer}.watchRow span{font-weight:800;text-align:left}.watchRow i{font-style:normal;font-size:9px;margin-right:5px}.watchRow b,.watchRow em{text-align:right;font-size:11px}.watchRow em{font-style:normal;font-weight:850}.watchRow.up span,.watchRow.up b,.watchRow.up em{color:#12d6a0}.watchRow.down span,.watchRow.down b,.watchRow.down em{color:#ff4d61}.watchRow.active{background:#10345f;border-color:#2f7cff}.sidebar small{display:block;color:#718aa4;font-size:9px;line-height:1.4;margin:8px 4px}.mainArea{min-width:0;padding:10px 12px 26px}.topnav{display:flex;align-items:center;gap:22px;background:#071522;border:1px solid #112c42;border-radius:8px;padding:10px 13px}.topnav nav{display:flex;gap:6px;flex:1}.topnav nav span{font-size:11px;color:#a9bdd1;padding:6px 9px;border-radius:6px}.topnav nav span.active{background:#102b49;color:#fff}.market{font-size:11px;color:#ff4d61;font-weight:800}.periods{display:flex;gap:4px;margin:8px 0}.periods button,.analysisTabs button{background:#0a1b2a;border:1px solid #173149;color:#b7c8d8;border-radius:5px;padding:6px 10px;cursor:pointer}.periods button.active,.analysisTabs button.active{background:#10345f;border-color:#2f7cff;color:#fff}.company{display:flex;align-items:center;background:linear-gradient(180deg,#081a2a,#071725);border:1px solid #173149;border-radius:8px;padding:10px 12px;margin-bottom:8px}.badge{display:flex;align-items:center;justify-content:center;width:44px;height:44px;background:#e61f35;border-radius:8px;font-weight:900;margin-right:11px}.company h1{font-size:18px;margin:0}.company p{font-size:10px;color:#8ca5bf;margin:3px 0 0}.workspace{display:grid;grid-template-columns:minmax(0,4.7fr) minmax(280px,1.45fr);gap:8px}.panel{background:linear-gradient(180deg,#0b1d2d,#091725);border:1px solid #173149;border-radius:8px;padding:10px}.chartPanel{padding:8px}.chartTitle{display:flex;justify-content:space-between;color:#a9bdd1;font-size:11px;padding:2px 5px 7px}.chartBox{width:100%;height:430px}.chartBox.small{height:255px}.analysisTabs{display:flex;gap:4px;margin:7px 0}.analysisPanel{padding:5px}.rightRail{display:flex;flex-direction:column;gap:8px}.rightRail .panel{margin:0}.heroCard{padding:12px}.bigPrice{font-size:28px;font-weight:900;margin-top:4px}.muted{color:#7f98b2;font-size:10px}.stateBox{display:flex;justify-content:space-between;align-items:center;margin-top:10px;font-size:10px}.stateBox b{font-size:16px}.scoreBar{height:7px;background:#173149;border-radius:10px;overflow:hidden;margin:8px 0 4px}.scoreBar i{display:block;height:100%;border-radius:10px}.scoreText{display:flex;justify-content:space-between;font-size:10px;color:#8ea6bf}.rightRail h3{font-size:12px;margin:0 0 7px}.row{display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid rgba(255,255,255,.045);font-size:10px}.row:last-child{border:0}.reason{font-size:10px;color:#d6e2ed;margin:4px 0}.green{color:#12d6a0!important}.red{color:#ff4d61!important}.metricGrid{display:grid;grid-template-columns:repeat(6,1fr);gap:7px;margin:8px 0}.metric{background:#0a1b2a;border:1px solid #173149;border-radius:7px;padding:9px 10px}.metric span{display:block;color:#7e97af;font-size:9px}.metric b{font-size:13px;margin-top:2px;display:block}.scanner{margin-top:8px}.sectionTitle h2{font-size:16px;margin:0}.sectionTitle p{font-size:10px;color:#7f98b2;margin:3px 0 9px}.table{overflow:auto}.tr{display:grid;grid-template-columns:80px 95px 90px 65px 60px 70px 80px 80px minmax(100px,1fr);gap:8px;padding:7px 5px;border-bottom:1px solid rgba(255,255,255,.05);font-size:10px;cursor:pointer}.tr:hover{background:rgba(255,255,255,.025)}.tr.head{color:#7f98b2;font-size:9px}.loading{height:430px;display:flex;align-items:center;justify-content:center;color:#7f98b2}@media(max-width:1100px){.appShell{grid-template-columns:210px 1fr}.topnav nav{display:none}.workspace{grid-template-columns:1fr}.rightRail{display:grid;grid-template-columns:repeat(2,1fr)}.metricGrid{grid-template-columns:repeat(3,1fr)}}@media(max-width:720px){.appShell{grid-template-columns:1fr}.sidebar{display:none}.mainArea{padding:7px}.workspace{grid-template-columns:1fr}.rightRail{grid-template-columns:1fr}.metricGrid{grid-template-columns:repeat(2,1fr)}.chartBox{height:330px}.chartBox.small{height:220px}.tr{min-width:760px}.periods{overflow:auto}.topnav{padding:8px}.topnav .brand{font-size:13px}}
+*{box-sizing:border-box}
+html,body{margin:0;background:#06111d;color:#eef6ff;font-family:Inter,system-ui,-apple-system,Segoe UI,sans-serif}
+body{overflow-x:hidden}
+button,select{font:inherit}
+.appShell{display:grid;grid-template-columns:250px minmax(0,1fr);min-height:100vh}
 
-/* Sinyal geçmişi */
-.saveSignalBtn{width:100%;margin-top:10px;border:1px solid #24557b;background:#10345f;color:#eef6ff;border-radius:6px;padding:8px 10px;font-size:10px;font-weight:800;cursor:pointer}.saveSignalBtn:hover{background:#15436e}.saveSignalBtn:disabled{opacity:.55;cursor:default}.signalHistory{margin-top:8px}.signalHeader{display:flex;justify-content:space-between;align-items:flex-end;gap:12px}.signalHeader h2{font-size:16px;margin:0}.signalHeader p{font-size:10px;color:#7f98b2;margin:3px 0 0}.signalActions{display:flex;gap:7px;align-items:flex-end}.signalActions label{display:flex;flex-direction:column;gap:3px;color:#7f98b2;font-size:9px}.signalActions select,.signalActions button{height:31px;background:#0a1b2a;border:1px solid #173149;color:#dbe8f5;border-radius:6px;padding:0 9px;font-size:10px}.signalActions button{cursor:pointer}.signalActions button:hover{background:#10345f}.signalMessage{margin:9px 0 0;padding:7px 9px;background:#0a2132;border:1px solid #174a6d;border-radius:6px;color:#9ed8ff;font-size:10px}.signalStats{display:grid;grid-template-columns:repeat(5,1fr);gap:7px;margin:10px 0 8px}.signalTableWrap{overflow:auto;border-top:1px solid rgba(255,255,255,.05)}.signalTr{display:grid;grid-template-columns:145px 70px 72px 92px 65px minmax(110px,1fr) 85px 85px;gap:8px;align-items:center;padding:8px 5px;border-bottom:1px solid rgba(255,255,255,.05);font-size:10px;cursor:pointer}.signalTr:hover{background:rgba(255,255,255,.025)}.signalTr.head{color:#7f98b2;font-size:9px;cursor:default}.signalBadge{display:inline-flex;align-items:center;justify-content:center;min-width:50px;border-radius:5px;padding:3px 7px;font-style:normal;font-size:9px;font-weight:900}.signalBadge.buy{color:#12d6a0;background:rgba(18,214,160,.11);border:1px solid rgba(18,214,160,.28)}.signalBadge.sell{color:#ff4d61;background:rgba(255,77,97,.11);border:1px solid rgba(255,77,97,.28)}.signalBadge.wait{color:#f8bd39;background:rgba(248,189,57,.11);border:1px solid rgba(248,189,57,.28)}.emptySignals{padding:18px 5px;color:#7f98b2;font-size:10px}@media(max-width:1100px){.signalHeader{align-items:flex-start;flex-direction:column}.signalStats{grid-template-columns:repeat(3,1fr)}.signalTr{min-width:820px}}@media(max-width:720px){.signalActions{width:100%;flex-wrap:wrap}.signalStats{grid-template-columns:repeat(2,1fr)}}
+.sidebar{position:sticky;top:0;height:100vh;background:#071522;border-right:1px solid #173149;padding:14px 10px;overflow:hidden;z-index:20}
+.sidebarTop{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.brand{font-weight:900;color:#6f7dff;white-space:nowrap}
+.brand b{color:#eef6ff}
+.sidebar h3{font-size:15px;margin:16px 5px 8px}
+.watchHead,.watchRow{display:grid;grid-template-columns:minmax(72px,1fr) 70px 72px;gap:5px;align-items:center}
+.watchHead{font-size:10px;color:#7f98b2;padding:0 7px 5px}
+.watchHead span:nth-child(n+2){text-align:right}
+.watchList{height:calc(100vh - 145px);overflow:auto;padding-right:2px;scrollbar-width:thin}
+.watchRow{width:100%;border:1px solid #12324b;background:#081827;border-radius:6px;padding:6px 7px;margin:3px 0;color:#dce9f6;cursor:pointer;min-height:32px}
+.watchRow span{font-weight:900;text-align:left;letter-spacing:.1px}
+.watchRow i{font-style:normal;font-size:9px;margin-right:5px}
+.watchRow b,.watchRow em{text-align:right;font-size:11px}
+.watchRow em{font-style:normal;font-weight:850}
+.watchRow.up span,.watchRow.up b,.watchRow.up em{color:#13e0b1}
+.watchRow.down span,.watchRow.down b,.watchRow.down em{color:#ff4d67}
+.watchRow.active{background:#0d3158;border-color:#2f7cff;box-shadow:inset 0 0 0 1px rgba(47,124,255,.18)}
+.sidebar small{display:block;color:#718aa4;font-size:9px;line-height:1.4;margin:8px 4px}
+
+.mobileMenuBtn,.mobileCloseBtn,.mobileBackdrop{display:none}
+
+.mainArea{min-width:0;padding:10px 12px 26px}
+.topnav{display:flex;align-items:center;gap:22px;background:#071522;border:1px solid #112c42;border-radius:8px;padding:10px 13px}
+.topnav nav{display:flex;gap:6px;flex:1;min-width:0}
+.topnav nav span{font-size:11px;color:#a9bdd1;padding:6px 9px;border-radius:6px;white-space:nowrap}
+.topnav nav span.active{background:#102b49;color:#fff}
+.market{font-size:11px;color:#ff4d61;font-weight:800;white-space:nowrap}
+
+.periods{display:flex;gap:4px;margin:8px 0}
+.periods button,.analysisTabs button{background:#0a1b2a;border:1px solid #173149;color:#b7c8d8;border-radius:5px;padding:6px 10px;cursor:pointer}
+.periods button.active,.analysisTabs button.active{background:#10345f;border-color:#2f7cff;color:#fff}
+
+.company{display:flex;align-items:center;background:linear-gradient(180deg,#081a2a,#071725);border:1px solid #173149;border-radius:8px;padding:10px 12px;margin-bottom:8px}
+.badge{display:flex;align-items:center;justify-content:center;width:44px;height:44px;background:#e61f35;border-radius:8px;font-weight:900;margin-right:11px;flex:0 0 auto}
+.company h1{font-size:18px;margin:0}
+.company p{font-size:10px;color:#8ca5bf;margin:3px 0 0}
+
+.workspace{display:grid;grid-template-columns:minmax(0,4.7fr) minmax(280px,1.45fr);gap:8px}
+.panel{background:linear-gradient(180deg,#0b1d2d,#091725);border:1px solid #173149;border-radius:8px;padding:10px}
+.chartPanel{padding:8px}
+.chartTitle{display:flex;justify-content:space-between;color:#a9bdd1;font-size:11px;padding:2px 5px 7px}
+.chartBox{width:100%;height:430px}
+.chartBox.small{height:255px}
+.analysisTabs{display:flex;gap:4px;margin:7px 0;overflow:auto}
+.analysisPanel{padding:5px}
+
+.rightRail{display:flex;flex-direction:column;gap:8px}
+.rightRail .panel{margin:0}
+.heroCard{padding:12px}
+.bigPrice{font-size:28px;font-weight:900;margin-top:4px}
+.muted{color:#7f98b2;font-size:10px}
+.stateBox{display:flex;justify-content:space-between;align-items:center;margin-top:10px;font-size:10px}
+.stateBox b{font-size:16px}
+.scoreBar{height:7px;background:#173149;border-radius:10px;overflow:hidden;margin:8px 0 4px}
+.scoreBar i{display:block;height:100%;border-radius:10px}
+.scoreText{display:flex;justify-content:space-between;font-size:10px;color:#8ea6bf}
+.saveSignalBtn{width:100%;margin-top:10px;padding:8px 10px;border:1px solid #2a5b86;border-radius:6px;background:#10345f;color:#fff;cursor:pointer}
+.saveSignalBtn:disabled{opacity:.55;cursor:not-allowed}
+.rightRail h3{font-size:12px;margin:0 0 7px}
+.row{display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid rgba(255,255,255,.045);font-size:10px}
+.row:last-child{border:0}
+.reason{font-size:10px;color:#d6e2ed;margin:4px 0}
+.green{color:#12d6a0!important}
+.red{color:#ff4d61!important}
+
+.metricGrid{display:grid;grid-template-columns:repeat(6,1fr);gap:7px;margin:8px 0}
+.metric{background:#0a1b2a;border:1px solid #173149;border-radius:7px;padding:9px 10px}
+.metric span{display:block;color:#7e97af;font-size:9px}
+.metric b{font-size:13px;margin-top:2px;display:block}
+
+.scanner{margin-top:8px}
+.sectionTitle h2,.signalHeader h2{font-size:16px;margin:0}
+.sectionTitle p,.signalHeader p{font-size:10px;color:#7f98b2;margin:3px 0 9px}
+.table,.signalTableWrap{overflow:auto}
+.tr{display:grid;grid-template-columns:80px 95px 90px 65px 60px 70px 80px 80px minmax(100px,1fr);gap:8px;padding:7px 5px;border-bottom:1px solid rgba(255,255,255,.05);font-size:10px;cursor:pointer}
+.tr:hover,.signalTr:hover{background:rgba(255,255,255,.025)}
+.tr.head{color:#7f98b2;font-size:9px}
+.loading{height:430px;display:flex;align-items:center;justify-content:center;color:#7f98b2}
+
+.signalHistory{margin-top:8px}
+.signalHeader{display:flex;justify-content:space-between;align-items:flex-end;gap:12px}
+.signalActions{display:flex;gap:6px;align-items:flex-end;flex-wrap:wrap}
+.signalActions label{font-size:9px;color:#7f98b2;display:flex;flex-direction:column;gap:4px}
+.signalActions select,.signalActions button{background:#0a1b2a;border:1px solid #173149;color:#dce9f6;border-radius:5px;padding:6px 8px}
+.signalActions button{cursor:pointer}
+.signalMessage{margin:8px 0;padding:8px 10px;border:1px solid #24445f;background:#0c2133;border-radius:6px;font-size:10px}
+.signalStats{display:grid;grid-template-columns:repeat(5,1fr);gap:7px;margin:8px 0}
+.signalTr{display:grid;grid-template-columns:130px 75px 70px 85px 55px minmax(100px,1fr) 80px 80px;gap:8px;padding:7px 5px;border-bottom:1px solid rgba(255,255,255,.05);font-size:10px;cursor:pointer;min-width:760px}
+.signalTr.head{color:#7f98b2;font-size:9px}
+.signalBadge{display:inline-flex;align-items:center;justify-content:center;min-width:44px;padding:3px 7px;border-radius:999px;font-style:normal;font-size:9px;font-weight:900}
+.signalBadge.buy{background:rgba(18,214,160,.14);color:#12d6a0;border:1px solid rgba(18,214,160,.25)}
+.signalBadge.sell{background:rgba(255,77,97,.14);color:#ff4d61;border:1px solid rgba(255,77,97,.25)}
+.signalBadge.wait{background:rgba(248,189,57,.12);color:#f8bd39;border:1px solid rgba(248,189,57,.22)}
+.emptySignals{padding:16px;color:#7f98b2;font-size:10px}
+
+@media(max-width:1100px){
+  .appShell{grid-template-columns:210px 1fr}
+  .topnav nav{display:none}
+  .workspace{grid-template-columns:1fr}
+  .rightRail{display:grid;grid-template-columns:repeat(2,1fr)}
+  .metricGrid{grid-template-columns:repeat(3,1fr)}
+  .signalStats{grid-template-columns:repeat(3,1fr)}
+}
+
+@media(max-width:720px){
+  .appShell{display:block;min-height:100dvh}
+  .mainArea{padding:7px 7px 22px;width:100%;max-width:100vw}
+  .sidebar{
+    display:block;
+    position:fixed;
+    top:0;bottom:0;left:0;
+    width:min(88vw,280px);
+    height:100dvh;
+    z-index:1002;
+    padding:13px 10px 10px;
+    transform:translateX(-105%);
+    transition:transform .2s ease;
+    box-shadow:16px 0 36px rgba(0,0,0,.38);
+    background:#071522;
+  }
+  .sidebar.open{transform:translateX(0)}
+  .sidebarTop{min-height:26px}
+  .sidebar .brand{font-size:15px;letter-spacing:.1px}
+  .sidebar h3{font-size:14px;margin:16px 5px 9px}
+  .watchHead{font-size:9px;padding:0 7px 6px}
+  .watchList{height:calc(100dvh - 124px);padding-bottom:10px}
+  .watchRow{
+    grid-template-columns:minmax(86px,1fr) 65px 68px;
+    min-height:31px;
+    padding:6px 7px;
+    margin:3px 0;
+    border-radius:6px;
+  }
+  .watchRow span{font-size:15px;line-height:1;font-weight:900}
+  .watchRow i{font-size:8px;margin-right:5px}
+  .watchRow b,.watchRow em{font-size:10px}
+  .sidebar small{display:none}
+  .mobileCloseBtn{
+    display:inline-flex;align-items:center;justify-content:center;
+    width:30px;height:30px;border-radius:7px;border:1px solid #173149;
+    background:#0a1b2a;color:#dce9f6;cursor:pointer
+  }
+  .mobileBackdrop{
+    display:block;position:fixed;inset:0;z-index:1001;border:0;
+    background:rgba(0,0,0,.58);padding:0
+  }
+  .mobileMenuBtn{
+    display:inline-flex;align-items:center;justify-content:center;gap:5px;
+    border:1px solid #24445f;background:#10345f;color:#fff;
+    padding:7px 9px;border-radius:7px;font-size:11px;font-weight:800;white-space:nowrap;cursor:pointer
+  }
+
+  .topnav{
+    padding:7px;
+    gap:7px;
+    flex-wrap:wrap;
+    position:sticky;top:0;z-index:50;
+    background:rgba(7,21,34,.96);
+    backdrop-filter:blur(10px)
+  }
+  .topnav>.brand{font-size:12px;flex:1}
+  .topnav nav{display:none}
+  .topnav>div:last-child{width:100%;gap:5px!important;overflow:auto;padding-top:2px}
+  .topnav>div:last-child button{font-size:10px!important;padding:6px 8px!important;white-space:nowrap}
+  .topnav>div:last-child span{font-size:9px!important;white-space:nowrap}
+  .market{font-size:9px}
+
+  .periods{overflow:auto;margin:7px 0;padding-bottom:1px}
+  .periods button,.analysisTabs button{padding:6px 9px;white-space:nowrap;font-size:11px}
+  .company{padding:9px;margin-bottom:7px;align-items:flex-start}
+  .badge{width:39px;height:39px;border-radius:7px;margin-right:9px;font-size:12px}
+  .company h1{font-size:17px}
+  .company p{font-size:9px}
+  .company>div:last-child>div{gap:5px!important;font-size:9px!important;margin-top:4px!important}
+
+  .workspace{grid-template-columns:1fr;gap:7px}
+  .panel{border-radius:7px;padding:8px}
+  .chartPanel{padding:6px}
+  .chartTitle{font-size:9px}
+  .chartBox{height:330px}
+  .chartBox.small{height:215px}
+  .analysisTabs{margin:6px 0}
+  .rightRail{display:grid;grid-template-columns:1fr;gap:7px}
+  .heroCard{padding:10px}
+  .bigPrice{font-size:24px}
+  .stateBox b{font-size:14px}
+  .rightRail h3{font-size:12px}
+  .row,.reason{font-size:10px}
+
+  .metricGrid{grid-template-columns:repeat(2,minmax(0,1fr));gap:6px;margin:7px 0}
+  .metric{padding:8px}
+  .metric span{font-size:8px}
+  .metric b{font-size:12px}
+
+  .scanner,.signalHistory{margin-top:7px}
+  .sectionTitle h2,.signalHeader h2{font-size:14px}
+  .sectionTitle p,.signalHeader p{font-size:9px}
+  .tr{min-width:760px}
+  .signalHeader{align-items:stretch;flex-direction:column}
+  .signalActions{align-items:stretch}
+  .signalActions label{flex:1;min-width:120px}
+  .signalActions button{flex:1}
+  .signalStats{grid-template-columns:repeat(2,minmax(0,1fr));gap:6px}
+}
