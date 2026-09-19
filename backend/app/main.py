@@ -734,3 +734,246 @@ def scan_and_notify(
         'alerts_sent': len(fired),
         'alerts': fired,
     }
+
+
+# ==========================================================
+# BIST30 GECMIS VERI BACKTEST
+# ==========================================================
+
+def _score_series(a: pd.DataFrame) -> pd.Series:
+    """
+    Mevcut technical_state() ile aynı puanlama mantığını satır bazında uygular.
+    Gelecek veriyi kullanmaz; her gün yalnızca o güne kadar oluşmuş indikatörleri kullanır.
+    """
+    score = pd.Series(0.0, index=a.index)
+
+    price = a['Close']
+    e20 = a['EMA20']
+    e50 = a['EMA50']
+    e200 = a['EMA200']
+    rsi = a['RSI'].fillna(50)
+    macd = a['MACD'].fillna(0)
+    macds = a['MACDS'].fillna(0)
+    hist = a['MACD_HIST'].fillna(0)
+    vr = a['VOL_RATIO'].fillna(1.0)
+    bb = a['BB_MID']
+
+    score += (price > e20).astype(float) * 1.5
+    score += (e20 > e50).astype(float) * 1.5
+
+    # Mevcut teknik skor mantığı: EMA200 varsa fiyat üzerindeyse +1.5,
+    # henüz EMA200 yoksa +0.75.
+    score += ((e200.notna()) & (price > e200)).astype(float) * 1.5
+    score += (e200.isna()).astype(float) * 0.75
+
+    score += (macd > macds).astype(float) * 1.5
+
+    balanced = (rsi >= 45) & (rsi <= 65)
+    border = (~balanced) & (rsi >= 35) & (rsi <= 75)
+    extreme = ~(balanced | border)
+    score += balanced.astype(float) * 1.5
+    score += border.astype(float) * 0.75
+    score += extreme.astype(float) * 0.25
+
+    score += (vr >= 1.2).astype(float) * 1.0
+    score += ((vr >= 0.8) & (vr < 1.2)).astype(float) * 0.5
+
+    score += ((bb.notna()) & (price >= bb)).astype(float) * 1.0
+    score += ((bb.notna()) & (price < bb)).astype(float) * 0.5
+    score += (bb.isna()).astype(float) * 0.5
+
+    score += (hist > 0).astype(float) * 0.5
+    return score.clip(lower=0, upper=10).round(2)
+
+
+def _signal_from_score(score: pd.Series) -> pd.Series:
+    out = pd.Series('BEKLE', index=score.index, dtype='object')
+    out.loc[score >= 7.5] = 'AL'
+    out.loc[score < 4.0] = 'SAT'
+    return out
+
+
+def _safe_pct(v):
+    if v is None or pd.isna(v):
+        return None
+    return round(float(v), 3)
+
+
+@app.get('/api/backtest/bist30')
+def backtest_bist30(
+    test_days: int = Query(default=252, ge=60, le=504),
+):
+    """
+    BIST30 için günlük mumlarda geçmiş test.
+    - 3 yıllık veri indirir; ilk bölüm indikatör ısınması içindir.
+    - Son test_days işlem günü değerlendirilir.
+    - AL: gelecekte fiyat yükselirse başarılı.
+    - SAT: gelecekte fiyat düşerse başarılı.
+    - BEKLE başarı oranına dahil edilmez.
+    - 1/3/5/10 işlem günü ufukları ölçülür.
+    """
+    horizons = [1, 3, 5, 10]
+    tickers = [s + '.IS' for s in BIST30]
+
+    try:
+        raw = yf.download(
+            tickers=tickers,
+            period='3y',
+            interval='1d',
+            auto_adjust=False,
+            progress=False,
+            threads=True,
+            group_by='ticker',
+        )
+    except Exception as exc:
+        raise HTTPException(503, f'Backtest verisi alınamadı: {exc}')
+
+    all_rows = []
+    symbol_summary = []
+
+    for symbol in BIST30:
+        ticker = symbol + '.IS'
+        try:
+            if isinstance(raw.columns, pd.MultiIndex):
+                if ticker not in raw.columns.get_level_values(0):
+                    continue
+                d = raw[ticker].copy()
+            else:
+                d = raw.copy()
+
+            d = d.dropna(subset=['Open', 'High', 'Low', 'Close'])
+            if len(d) < 260:
+                continue
+
+            a = indicators(d)
+            a['score'] = _score_series(a)
+            a['signal'] = _signal_from_score(a['score'])
+
+            # Sadece son test_days işlem gününü test et.
+            start_pos = max(0, len(a) - test_days)
+            tested = a.iloc[start_pos:].copy()
+
+            per_symbol_counts = {'AL': 0, 'SAT': 0, 'BEKLE': 0}
+            for h in horizons:
+                tested[f'ret_{h}'] = (a['Close'].shift(-h).reindex(tested.index) / tested['Close'] - 1.0) * 100.0
+
+            for dt, row in tested.iterrows():
+                sig = row['signal']
+                per_symbol_counts[sig] = per_symbol_counts.get(sig, 0) + 1
+
+                for h in horizons:
+                    ret = row[f'ret_{h}']
+                    if pd.isna(ret):
+                        continue
+
+                    success = None
+                    if sig == 'AL':
+                        success = bool(ret > 0)
+                    elif sig == 'SAT':
+                        success = bool(ret < 0)
+
+                    all_rows.append({
+                        'symbol': symbol,
+                        'date': pd.Timestamp(dt).date().isoformat(),
+                        'signal': sig,
+                        'score': float(row['score']),
+                        'horizon': h,
+                        'future_return_pct': float(ret),
+                        'success': success,
+                    })
+
+            symbol_summary.append({
+                'symbol': symbol,
+                'tested_days': int(len(tested)),
+                'al_days': int(per_symbol_counts.get('AL', 0)),
+                'sat_days': int(per_symbol_counts.get('SAT', 0)),
+                'wait_days': int(per_symbol_counts.get('BEKLE', 0)),
+            })
+
+        except Exception:
+            continue
+
+    if not all_rows:
+        raise HTTPException(503, 'Backtest için yeterli veri üretilemedi.')
+
+    df = pd.DataFrame(all_rows)
+    actionable = df[df['signal'].isin(['AL', 'SAT'])].copy()
+
+    horizon_summary = []
+    for h in horizons:
+        g = actionable[actionable['horizon'] == h].copy()
+        if len(g) == 0:
+            horizon_summary.append({
+                'horizon_days': h,
+                'signals': 0,
+                'success_rate_pct': None,
+                'avg_directional_return_pct': None,
+                'median_directional_return_pct': None,
+            })
+            continue
+
+        # AL için getiri pozitif, SAT için fiyat düşüşü pozitif performans kabul edilir.
+        directional = g['future_return_pct'].where(g['signal'] == 'AL', -g['future_return_pct'])
+        horizon_summary.append({
+            'horizon_days': h,
+            'signals': int(len(g)),
+            'successes': int(g['success'].sum()),
+            'failures': int((~g['success']).sum()),
+            'success_rate_pct': round(float(g['success'].mean() * 100), 2),
+            'avg_directional_return_pct': round(float(directional.mean()), 3),
+            'median_directional_return_pct': round(float(directional.median()), 3),
+        })
+
+    # Hisse bazında 5 günlük performans: yeterli sinyal olanları göster.
+    h5 = actionable[actionable['horizon'] == 5].copy()
+    by_symbol = []
+    if len(h5):
+        for symbol, g in h5.groupby('symbol'):
+            directional = g['future_return_pct'].where(g['signal'] == 'AL', -g['future_return_pct'])
+            by_symbol.append({
+                'symbol': symbol,
+                'signals': int(len(g)),
+                'success_rate_pct': round(float(g['success'].mean() * 100), 2),
+                'avg_directional_return_pct': round(float(directional.mean()), 3),
+            })
+        by_symbol.sort(key=lambda x: (x['signals'] >= 10, x['success_rate_pct'], x['avg_directional_return_pct']), reverse=True)
+
+    # AL ve SAT'ı ayrı göster.
+    signal_type_summary = []
+    for sig in ['AL', 'SAT']:
+        for h in horizons:
+            g = actionable[(actionable['signal'] == sig) & (actionable['horizon'] == h)].copy()
+            if not len(g):
+                continue
+            directional = g['future_return_pct'] if sig == 'AL' else -g['future_return_pct']
+            signal_type_summary.append({
+                'signal': sig,
+                'horizon_days': h,
+                'signals': int(len(g)),
+                'success_rate_pct': round(float(g['success'].mean() * 100), 2),
+                'avg_directional_return_pct': round(float(directional.mean()), 3),
+            })
+
+    return {
+        'ok': True,
+        'method': {
+            'universe': 'BIST30',
+            'data_interval': '1d',
+            'download_period': '3y',
+            'tested_last_trading_days': test_days,
+            'signal_rules': {
+                'AL': 'technical_score >= 7.5',
+                'SAT': 'technical_score < 4.0',
+                'BEKLE': '4.0 <= technical_score < 7.5',
+            },
+            'success_definition': 'AL sonrası fiyat yükselmesi; SAT sonrası fiyat düşmesi',
+            'horizons_trading_days': horizons,
+            'note': 'BEKLE başarı oranına dahil edilmez. İşlem maliyeti, vergi, kayma ve gerçek zamanlı veri farkı dahil değildir.',
+        },
+        'tested_symbols': int(len(symbol_summary)),
+        'total_actionable_signal_observations': int(len(actionable[actionable['horizon'] == 1])),
+        'horizon_summary': horizon_summary,
+        'signal_type_summary': signal_type_summary,
+        'best_symbols_5d': by_symbol[:10],
+        'symbol_coverage': symbol_summary,
+    }
