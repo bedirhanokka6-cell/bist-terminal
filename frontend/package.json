@@ -1,17 +1,22 @@
 {
   "name": "bist-terminal-web",
   "private": true,
-  "scripts": {"dev":"next dev","build":"next build","start":"next start"},
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start"
+  },
   "dependencies": {
+    "firebase": "^12.19.0",
+    "lightweight-charts": "5.0.8",
     "next": "15.5.24",
     "react": "19.1.1",
-    "react-dom": "19.1.1",
-    "lightweight-charts": "5.0.8"
+    "react-dom": "19.1.1"
   },
   "devDependencies": {
-    "typescript": "^5.8.3",
     "@types/node": "^22.10.0",
     "@types/react": "^19.0.0",
-    "@types/react-dom": "^19.0.0"
+    "@types/react-dom": "^19.0.0",
+    "typescript": "^5.8.3"
   }
 }
