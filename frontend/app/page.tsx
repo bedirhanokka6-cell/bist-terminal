@@ -35,16 +35,53 @@ export default function Home(){
     }catch{}
   };
 
+  const loadWatch=async()=>{
+    try{
+      const r=await fetch(`${API}/api/bist30`,{cache:'no-store'});
+      if(r.ok)setWatch(await r.json());
+    }catch{}
+  };
+
+  const loadScanner=async()=>{
+    try{
+      const r=await fetch(`${API}/api/scanner?min_score=6`,{cache:'no-store'});
+      if(r.ok)setScan(await r.json());
+    }catch{}
+  };
+
+  const loadStock=async(showLoading=false)=>{
+    if(showLoading)setLoading(true);
+    try{
+      const r=await fetch(`${API}/api/stock/${symbol}?period=${period}`,{cache:'no-store'});
+      if(r.ok)setStock(await r.json());
+    }catch{}
+    finally{
+      if(showLoading)setLoading(false);
+    }
+  };
+
   useEffect(()=>{
-    fetch(`${API}/api/bist30`).then(r=>r.json()).then(setWatch).catch(()=>{});
-    fetch(`${API}/api/scanner?min_score=6`).then(r=>r.json()).then(setScan).catch(()=>{});
+    loadWatch();
+    loadScanner();
     loadSignals();
+
+    const watchTimer=setInterval(loadWatch,60000);
+    const scannerTimer=setInterval(loadScanner,60000);
+
+    return()=>{
+      clearInterval(watchTimer);
+      clearInterval(scannerTimer);
+    };
   },[]);
 
   useEffect(()=>{
-    setLoading(true);
-    fetch(`${API}/api/stock/${symbol}?period=${period}`)
-      .then(r=>r.json()).then(setStock).finally(()=>setLoading(false));
+    loadStock(true);
+
+    const stockTimer=setInterval(()=>{
+      if(document.visibilityState==='visible')loadStock(false);
+    },15000);
+
+    return()=>clearInterval(stockTimer);
   },[symbol,period]);
 
   useEffect(()=>{loadSignals();},[horizon]);
@@ -87,6 +124,7 @@ export default function Home(){
     dataStatus==='GUNCEL' ? '#2ecc71' :
     dataStatus==='GECIKMELI' ? '#f8bd39' :
     dataStatus==='ESKI' ? '#ff5c5c' :
+    dataStatus==='PIYASA KAPALI' ? '#9aa4b2' :
     '#9aa4b2';
 
   return <main className="appShell">
@@ -113,6 +151,8 @@ export default function Home(){
             <span>{dataAge==null?'Gecikme: —':`Gecikme: ${Number(dataAge).toFixed(1)} dk`}</span>
             <span>•</span>
             <b style={{color:dataStatusColor}}>{dataStatus}</b>
+            <span>•</span>
+            <span>Otomatik yenileme: 15 sn</span>
           </div>
         </div>
       </section>
