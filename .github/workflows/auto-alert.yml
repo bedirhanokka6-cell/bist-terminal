@@ -1,0 +1,26 @@
+name: Otomatik Teknik Alarm
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Türkiye 10:00-18:00 = UTC 07:00-15:00
+    # Yahoo/yfinance gecikmeli olabildiği için 15 dakikalık tarama yeterli.
+    - cron: "*/15 7-15 * * 1-5"
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Render backend'i uyandir
+        run: |
+          curl -sS --retry 3 --retry-delay 15 --max-time 90 \
+            https://bist-terminal-api.onrender.com/health || true
+
+      - name: BIST30 teknik alarm taramasi
+        env:
+          ALERT_SCAN_KEY: ${{ secrets.ALERT_SCAN_KEY }}
+        run: |
+          curl -f -sS --retry 2 --retry-delay 10 --max-time 180 \
+            -X POST \
+            -H "x-alert-key: ${ALERT_SCAN_KEY}" \
+            https://bist-terminal-api.onrender.com/api/alerts/scan

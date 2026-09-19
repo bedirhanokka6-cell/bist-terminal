@@ -53,3 +53,25 @@ class SignalResult(Base):
     successful = Column(Boolean, nullable=True)
     evaluated_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class NotificationToken(Base):
+    __tablename__ = "notification_tokens"
+
+    id = Column(Integer, primary_key=True, index=True)
+    token = Column(Text, unique=True, nullable=False)
+    platform = Column(String(32), nullable=False, default="web")
+    active = Column(Boolean, default=True, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class NotificationEvent(Base):
+    __tablename__ = "notification_events"
+
+    id = Column(Integer, primary_key=True, index=True)
+    symbol = Column(String(16), index=True, nullable=False)
+    rule_key = Column(String(64), index=True, nullable=False)
+    title = Column(String(200), nullable=False)
+    body = Column(Text, nullable=True)
+    sent_at = Column(DateTime, default=datetime.utcnow, index=True, nullable=False)

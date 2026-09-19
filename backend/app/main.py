@@ -1,8 +1,10 @@
 from fastapi import FastAPI, HTTPException, Depends, Query
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 import numpy as np
 import pandas as pd
 import yfinance as yf
+import os
 from datetime import datetime, time
 from zoneinfo import ZoneInfo
 from sqlalchemy.orm import Session
@@ -12,8 +14,9 @@ from .analysis import indicators, technical_state
 from .data import BIST30, load_chart
 from .news import company_news, kap_notifications
 from .db import get_db
-from .models import Signal, SignalResult
+from .models import Signal, SignalResult, NotificationToken, NotificationEvent
 from .signal_service import create_signal_from_analysis, evaluate_signal, serialize_signal, serialize_result
+from .push_service import send_push
 
 app = FastAPI(title='BIST Terminal API', version='0.2.2')
 app.add_middleware(
@@ -502,4 +505,232 @@ def signal_stats(
         'success_rate_pct': success_rate,
         'average_return_pct': avg_return,
         'note': 'BEKLE sinyalleri başarı oranına dahil edilmez.',
+    }
+
+
+# ==========================================================
+# TELEFON PUSH TOKEN + OTOMATIK ALARM MOTORU
+# ==========================================================
+
+class PushRegisterRequest(BaseModel):
+    token: str
+    platform: str = "web"
+
+
+@app.post('/api/push/register')
+def register_push_token(body: PushRegisterRequest, db: Session = Depends(get_db)):
+    token = (body.token or '').strip()
+    if len(token) < 20:
+        raise HTTPException(400, 'Geçersiz FCM token')
+
+    row = db.query(NotificationToken).filter(NotificationToken.token == token).first()
+    if row:
+        row.active = True
+        row.platform = body.platform or 'web'
+        row.updated_at = datetime.utcnow()
+    else:
+        row = NotificationToken(
+            token=token,
+            platform=body.platform or 'web',
+            active=True,
+        )
+        db.add(row)
+    db.commit()
+    return {'ok': True}
+
+
+@app.get('/api/push/status')
+def push_status(db: Session = Depends(get_db)):
+    active_count = db.query(NotificationToken).filter(NotificationToken.active == True).count()
+    return {
+        'ok': True,
+        'firebase_ready': bool(os.getenv('FIREBASE_PROJECT_ID') and os.getenv('FIREBASE_CLIENT_EMAIL') and os.getenv('FIREBASE_PRIVATE_KEY')),
+        'active_tokens': active_count,
+    }
+
+
+def _cooldown_exists(db: Session, symbol: str, rule_key: str, minutes: int = 60) -> bool:
+    cutoff = datetime.utcnow() - pd.Timedelta(minutes=minutes).to_pytimedelta()
+    return (
+        db.query(NotificationEvent)
+        .filter(
+            NotificationEvent.symbol == symbol,
+            NotificationEvent.rule_key == rule_key,
+            NotificationEvent.sent_at >= cutoff,
+        )
+        .first()
+        is not None
+    )
+
+
+def _record_alert(db: Session, symbol: str, rule_key: str, title: str, body: str):
+    db.add(NotificationEvent(
+        symbol=symbol,
+        rule_key=rule_key,
+        title=title,
+        body=body,
+        sent_at=datetime.utcnow(),
+    ))
+    db.commit()
+
+
+def _batch_alert_scan_data():
+    """BIST30 için 30 dakikalık veriyi tek istekte al."""
+    tickers = [s + '.IS' for s in BIST30]
+    return yf.download(
+        tickers=tickers,
+        period='1mo',
+        interval='30m',
+        auto_adjust=False,
+        progress=False,
+        threads=True,
+        group_by='ticker',
+    )
+
+
+@app.post('/api/alerts/scan')
+def scan_and_notify(
+    x_alert_key: str | None = None,
+    db: Session = Depends(get_db),
+):
+    # GitHub Actions dışından rastgele tetiklenmeyi engelle.
+    expected_key = os.getenv('ALERT_SCAN_KEY', '').strip()
+    if expected_key and (x_alert_key or '').strip() != expected_key:
+        raise HTTPException(403, 'Alarm anahtarı geçersiz')
+
+    market = bist_market_status()
+    if not market['market_open']:
+        return {
+            'ok': True,
+            'skipped': True,
+            'reason': market['reason'],
+            'market_status': market['market_status'],
+            'alerts_sent': 0,
+        }
+
+    tokens = [
+        r.token for r in
+        db.query(NotificationToken).filter(NotificationToken.active == True).all()
+        if r.token
+    ]
+    if not tokens:
+        return {'ok': True, 'skipped': True, 'reason': 'Kayıtlı telefon tokeni yok', 'alerts_sent': 0}
+
+    try:
+        data = _batch_alert_scan_data()
+    except Exception as exc:
+        raise HTTPException(503, f'Piyasa verisi alınamadı: {exc}')
+
+    fired = []
+    for symbol in BIST30:
+        ticker = symbol + '.IS'
+        try:
+            if isinstance(data.columns, pd.MultiIndex):
+                if ticker not in data.columns.get_level_values(0):
+                    continue
+                d = data[ticker].dropna(how='all').copy()
+            else:
+                d = data.dropna(how='all').copy()
+
+            if len(d) < 35:
+                continue
+
+            a = indicators(d)
+            if len(a) < 3:
+                continue
+
+            t = technical_state(a)
+            l = a.iloc[-1]
+            p = a.iloc[-2]
+
+            price = float(l['Close'])
+            rsi = clean_num(l['RSI'])
+            macd = clean_num(l['MACD'])
+            macds = clean_num(l['MACDS'])
+            prev_macd = clean_num(p['MACD'])
+            prev_macds = clean_num(p['MACDS'])
+
+            # Destek/direnç bugünkü son mumdan etkilenmesin diye son mumu dışarıda bırak.
+            hist = a.iloc[:-1]
+            support = float(hist['Low'].tail(min(50, len(hist))).min())
+            resistance = float(hist['High'].tail(min(50, len(hist))).max())
+
+            rules = []
+
+            if t['score'] >= 8.0:
+                rules.append((
+                    'score_8',
+                    f'{symbol} teknik skor yükseldi',
+                    f'{symbol} teknik skoru {t["score"]:.1f}/10. Fiyat: {price:.2f} ₺'
+                ))
+
+            if support > 0 and price <= support * 1.015 and price >= support * 0.985:
+                rules.append((
+                    'near_support',
+                    f'{symbol} destek bölgesinde',
+                    f'Fiyat {price:.2f} ₺ • Destek yaklaşık {support:.2f} ₺'
+                ))
+
+            if resistance > 0 and price > resistance * 1.002:
+                rules.append((
+                    'resistance_break',
+                    f'{symbol} direnç üstüne çıktı',
+                    f'Fiyat {price:.2f} ₺ • Önceki direnç yaklaşık {resistance:.2f} ₺'
+                ))
+
+            if rsi is not None and rsi < 30:
+                rules.append((
+                    'rsi_oversold',
+                    f'{symbol} RSI aşırı satım bölgesinde',
+                    f'RSI {rsi:.1f} • Fiyat {price:.2f} ₺'
+                ))
+
+            if (
+                prev_macd is not None and prev_macds is not None and
+                macd is not None and macds is not None and
+                prev_macd <= prev_macds and macd > macds
+            ):
+                rules.append((
+                    'macd_bull_cross',
+                    f'{symbol} MACD pozitif kesişim',
+                    f'MACD yukarı kesişim oluştu • Fiyat {price:.2f} ₺'
+                ))
+
+            for rule_key, title, body in rules:
+                if _cooldown_exists(db, symbol, rule_key, minutes=60):
+                    continue
+
+                result = send_push(
+                    tokens=tokens,
+                    title=title,
+                    body=body,
+                    data={'symbol': symbol, 'rule': rule_key},
+                )
+
+                # En az bir cihaza başarıyla gittiyse cooldown kaydı aç.
+                if result.get('success_count', 0) > 0:
+                    _record_alert(db, symbol, rule_key, title, body)
+                    fired.append({
+                        'symbol': symbol,
+                        'rule': rule_key,
+                        'title': title,
+                        'success_count': result.get('success_count', 0),
+                    })
+
+                # Geçersiz tokenleri otomatik pasife al.
+                for bad_token in result.get('invalid_tokens', []):
+                    row = db.query(NotificationToken).filter(NotificationToken.token == bad_token).first()
+                    if row:
+                        row.active = False
+                db.commit()
+
+        except Exception:
+            continue
+
+    return {
+        'ok': True,
+        'skipped': False,
+        'market_status': market['market_status'],
+        'alerts_sent': len(fired),
+        'alerts': fired,
     }

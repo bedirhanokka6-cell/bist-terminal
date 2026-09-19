@@ -126,6 +126,14 @@ export default function Home(){
       }
 
       setPushToken(token);
+      // Tokeni backend'e kaydet; bundan sonra otomatik alarmlar bu telefona gelir.
+      try{
+        await fetch(`${API}/api/push/register`,{
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({token,platform:'web'})
+        });
+      }catch{}
       setPushStatus('Bildirim açık');
 
       onMessage(messaging,(payload)=>{

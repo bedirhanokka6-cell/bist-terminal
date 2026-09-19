@@ -8,7 +8,7 @@ def main():
         conn.execute(text("SELECT 1"))
     Base.metadata.create_all(bind=engine)
     print("OK: PostgreSQL bağlantısı başarılı.")
-    print("OK: Tablolar oluşturuldu: signals, watchlist, virtual_portfolio, signal_results")
+    print("OK: Eksik tablolar oluşturuldu (notification_tokens, notification_events dahil).")
 
 
 if __name__ == "__main__":
