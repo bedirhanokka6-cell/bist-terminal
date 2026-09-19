@@ -1,6 +1,8 @@
 'use client';
 import {useEffect, useMemo, useState} from 'react';
 import {PriceChart, AnalysisChart} from '../components/StockChart';
+import {initializeApp, getApps} from 'firebase/app';
+import {getMessaging, getToken, onMessage, isSupported} from 'firebase/messaging';
 
 type Stock={symbol:string;price:number;change_pct:number};
 type Scanner={symbol:string;price:number;change_pct:number;score:number;state:string;rsi:number|null;vol_ratio:number|null;support:number;resistance:number};
@@ -25,6 +27,8 @@ export default function Home(){
   const [horizon,setHorizon]=useState(5);
   const [signalBusy,setSignalBusy]=useState(false);
   const [signalMessage,setSignalMessage]=useState('');
+  const [pushStatus,setPushStatus]=useState('Bildirim kapalı');
+  const [pushToken,setPushToken]=useState('');
 
   const loadSignals=async()=>{
     try{
@@ -35,53 +39,16 @@ export default function Home(){
     }catch{}
   };
 
-  const loadWatch=async()=>{
-    try{
-      const r=await fetch(`${API}/api/bist30`,{cache:'no-store'});
-      if(r.ok)setWatch(await r.json());
-    }catch{}
-  };
-
-  const loadScanner=async()=>{
-    try{
-      const r=await fetch(`${API}/api/scanner?min_score=6`,{cache:'no-store'});
-      if(r.ok)setScan(await r.json());
-    }catch{}
-  };
-
-  const loadStock=async(showLoading=false)=>{
-    if(showLoading)setLoading(true);
-    try{
-      const r=await fetch(`${API}/api/stock/${symbol}?period=${period}`,{cache:'no-store'});
-      if(r.ok)setStock(await r.json());
-    }catch{}
-    finally{
-      if(showLoading)setLoading(false);
-    }
-  };
-
   useEffect(()=>{
-    loadWatch();
-    loadScanner();
+    fetch(`${API}/api/bist30`).then(r=>r.json()).then(setWatch).catch(()=>{});
+    fetch(`${API}/api/scanner?min_score=6`).then(r=>r.json()).then(setScan).catch(()=>{});
     loadSignals();
-
-    const watchTimer=setInterval(loadWatch,60000);
-    const scannerTimer=setInterval(loadScanner,60000);
-
-    return()=>{
-      clearInterval(watchTimer);
-      clearInterval(scannerTimer);
-    };
   },[]);
 
   useEffect(()=>{
-    loadStock(true);
-
-    const stockTimer=setInterval(()=>{
-      if(document.visibilityState==='visible')loadStock(false);
-    },15000);
-
-    return()=>clearInterval(stockTimer);
+    setLoading(true);
+    fetch(`${API}/api/stock/${symbol}?period=${period}`)
+      .then(r=>r.json()).then(setStock).finally(()=>setLoading(false));
   },[symbol,period]);
 
   useEffect(()=>{loadSignals();},[horizon]);
@@ -108,6 +75,71 @@ export default function Home(){
     }catch(e:any){setSignalMessage(e?.message||'Değerlendirme başarısız.')}finally{setSignalBusy(false)}
   };
 
+
+  const enableNotifications=async()=>{
+    try{
+      if(!('Notification' in window)){
+        setPushStatus('Bu tarayıcı bildirim desteklemiyor');
+        return;
+      }
+
+      const supported=await isSupported();
+      if(!supported){
+        setPushStatus('Firebase Messaging desteklenmiyor');
+        return;
+      }
+
+      const permission=await Notification.requestPermission();
+      if(permission!=='granted'){
+        setPushStatus('Bildirim izni verilmedi');
+        return;
+      }
+
+      const firebaseConfig={
+        apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
+        authDomain: process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN,
+        projectId: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID,
+        storageBucket: process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET,
+        messagingSenderId: process.env.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID,
+        appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID,
+        measurementId: process.env.NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID,
+      };
+
+      const app=getApps().length?getApps()[0]:initializeApp(firebaseConfig);
+      const messaging=getMessaging(app);
+
+      const registration=await navigator.serviceWorker.register('/firebase-messaging-sw.js');
+
+      const token=await getToken(messaging,{
+        vapidKey: process.env.NEXT_PUBLIC_FIREBASE_VAPID_KEY,
+        serviceWorkerRegistration: registration,
+      });
+
+      if(!token){
+        setPushStatus('Bildirim tokeni alınamadı');
+        return;
+      }
+
+      setPushToken(token);
+      setPushStatus('Bildirim açık');
+
+      onMessage(messaging,(payload)=>{
+        const title=payload?.notification?.title || 'BIST Terminal';
+        const body=payload?.notification?.body || 'Yeni bildirim';
+        new Notification(title,{body});
+      });
+    }catch(e:any){
+      console.error(e);
+      setPushStatus(e?.message || 'Bildirim kurulamadı');
+    }
+  };
+
+  const copyPushToken=async()=>{
+    if(!pushToken)return;
+    await navigator.clipboard.writeText(pushToken);
+    setPushStatus('Token kopyalandı');
+  };
+
   const last=stock?.candles?.[stock.candles.length-1];
   const prev=stock?.candles?.[stock.candles.length-2];
   const change=last&&prev?((last.close/prev.close)-1)*100:0;
@@ -124,7 +156,6 @@ export default function Home(){
     dataStatus==='GUNCEL' ? '#2ecc71' :
     dataStatus==='GECIKMELI' ? '#f8bd39' :
     dataStatus==='ESKI' ? '#ff5c5c' :
-    dataStatus==='PIYASA KAPALI' ? '#9aa4b2' :
     '#9aa4b2';
 
   return <main className="appShell">
@@ -136,7 +167,14 @@ export default function Home(){
     </aside>
 
     <section className="mainArea">
-      <header className="topnav"><div className="brand">▮▮▮ <b>BIST TERMINAL</b></div><nav><span>Ana Sayfa</span><span className="active">Hisse Analizi</span><span>BIST 30 Tarayıcı</span><span>Haberler (KAP)</span><span>Takip Listesi</span><span>Sinyal Geçmişi</span></nav><div className="market">● Piyasa Takip</div></header>
+      <header className="topnav"><div className="brand">▮▮▮ <b>BIST TERMINAL</b></div><nav><span>Ana Sayfa</span><span className="active">Hisse Analizi</span><span>BIST 30 Tarayıcı</span><span>Haberler (KAP)</span><span>Takip Listesi</span><span>Sinyal Geçmişi</span></nav><div style={{display:'flex',gap:'8px',alignItems:'center'}}>
+          <button onClick={enableNotifications} style={{padding:'7px 10px',borderRadius:'7px',border:'1px solid #24445f',background:'#123451',color:'#fff',cursor:'pointer'}}>
+            🔔 Bildirimleri Aç
+          </button>
+          {pushToken?<button onClick={copyPushToken} style={{padding:'7px 10px',borderRadius:'7px',border:'1px solid #24445f',background:'#0e2435',color:'#b8c7d4',cursor:'pointer'}}>Tokeni Kopyala</button>:null}
+          <span style={{fontSize:'11px',color:pushStatus==='Bildirim açık'?'#32d296':'#9aa4b2'}}>{pushStatus}</span>
+          <div className="market">● Piyasa Takip</div>
+        </div></header>
       <div className="periods">{periods.map(p=><button className={period===p?'active':''} onClick={()=>setPeriod(p)} key={p}>{p}</button>)}</div>
       <section className="company">
         <div className="badge">{symbol.slice(0,3)}</div>
@@ -151,8 +189,6 @@ export default function Home(){
             <span>{dataAge==null?'Gecikme: —':`Gecikme: ${Number(dataAge).toFixed(1)} dk`}</span>
             <span>•</span>
             <b style={{color:dataStatusColor}}>{dataStatus}</b>
-            <span>•</span>
-            <span>Otomatik yenileme: 15 sn</span>
           </div>
         </div>
       </section>
