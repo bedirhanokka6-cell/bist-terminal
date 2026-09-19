@@ -67,3 +67,16 @@ node_modules/
 
 # dataconnect generated files
 .dataconnect
+
+# BIST Terminal - private files
+.streamlit/secrets.toml
+backend/.env
+backend/.venv/
+frontend/.env.local
+frontend/.next/
+frontend/node_modules/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo

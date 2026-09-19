@@ -1,0 +1,9 @@
+{
+  "name":"BIST Terminal Pro",
+  "short_name":"BIST Pro",
+  "start_url":"/",
+  "display":"standalone",
+  "background_color":"#06111d",
+  "theme_color":"#06111d",
+  "icons":[]
+}
