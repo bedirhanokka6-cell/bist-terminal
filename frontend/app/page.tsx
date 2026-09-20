@@ -14,33 +14,6 @@ const periods=['1G','5G','1A','3A','6A','1Y','2Y'];
 const analyses=['RSI','MACD','Hacim','RVOL','OBV','MFI','CMF','Bollinger','EMA'];
 const horizons=[1,3,5,10];
 
-
-function simplifyCandles(candles:any[], period:string){
-  if(!Array.isArray(candles) || candles.length===0)return [];
-  // 1G grafiğinde yaklaşık 5 dakikalık çok fazla mum gelirse
-  // 3 mumu tek mumda birleştirerek yaklaşık 15 dakikalık görünüm oluştur.
-  const groupSize = period==='1G' ? 3 : 1;
-  if(groupSize===1 || candles.length<45)return candles;
-
-  const out:any[]=[];
-  for(let i=0;i<candles.length;i+=groupSize){
-    const group=candles.slice(i,i+groupSize);
-    if(!group.length)continue;
-    const first=group[0];
-    const last=group[group.length-1];
-    out.push({
-      ...last,
-      time:first.time,
-      open:first.open,
-      high:Math.max(...group.map((x:any)=>Number(x.high)).filter(Number.isFinite)),
-      low:Math.min(...group.map((x:any)=>Number(x.low)).filter(Number.isFinite)),
-      close:last.close,
-      volume:group.reduce((sum:number,x:any)=>sum+(Number(x.volume)||0),0),
-    });
-  }
-  return out;
-}
-
 export default function Home(){
   const [watch,setWatch]=useState<Stock[]>([]);
   const [scan,setScan]=useState<Scanner[]>([]);
@@ -56,11 +29,6 @@ export default function Home(){
   const [signalMessage,setSignalMessage]=useState('');
   const [pushStatus,setPushStatus]=useState('Bildirim kapalı');
   const [pushToken,setPushToken]=useState('');
-  const [tradeHistory,setTradeHistory]=useState<any[]>([]);
-  const [tradeHistoryLoading,setTradeHistoryLoading]=useState(false);
-  const [v5,setV5]=useState<any>(null);
-  const [openPositions,setOpenPositions]=useState<any[]>([]);
-  const [v9Status,setV9Status]=useState<any>(null);
   const [mobileMenuOpen,setMobileMenuOpen]=useState(false);
 
   const loadSignals=async()=>{
@@ -97,75 +65,21 @@ export default function Home(){
     }
   };
 
-  const loadV5=async()=>{
-    try{
-      const r=await fetch(`${API}/api/analysis/v5/${symbol}`,{cache:'no-store'});
-      if(r.ok)setV5(await r.json());
-    }catch{}
-  };
-
-  const loadOpenPositions=async()=>{
-    try{
-      const r=await fetch(`${API}/api/positions/open`,{cache:'no-store'});
-      if(r.ok){
-        const j=await r.json();
-        setOpenPositions(j?.items ?? []);
-      }
-    }catch{}
-  };
-
-  const loadV9Status=async()=>{
-    try{
-      const r=await fetch(`${API}/api/v9/live-status`,{cache:'no-store'});
-      if(r.ok)setV9Status(await r.json());
-    }catch{}
-  };
-
-  const loadTradeHistory=async()=>{
-    setTradeHistoryLoading(true);
-    try{
-      const r=await fetch(`${API}/api/backtest/v4-trades?limit=40`,{cache:'no-store'});
-      if(r.ok){
-        const j=await r.json();
-        setTradeHistory(j?.trades ?? []);
-      }
-    }catch{}
-    finally{setTradeHistoryLoading(false);}
-  };
-
   useEffect(()=>{
     loadWatch();
     loadScanner();
     loadSignals();
-    loadOpenPositions();
-    loadV9Status();
     const watchTimer=setInterval(loadWatch,60000);
-    const scannerTimer=setInterval(loadScanner,120000);
-    const positionTimer=setInterval(loadOpenPositions,120000);
-    const v9Timer=setInterval(loadV9Status,120000);
-    return()=>{clearInterval(watchTimer);clearInterval(scannerTimer);clearInterval(positionTimer);clearInterval(v9Timer);};
+    const scannerTimer=setInterval(loadScanner,60000);
+    return()=>{clearInterval(watchTimer);clearInterval(scannerTimer);};
   },[]);
 
   useEffect(()=>{
     loadStock(true);
-    loadV5();
-
     const stockTimer=setInterval(()=>{
-      if(document.visibilityState==='visible'){
-        loadStock(false);
-      }
+      if(document.visibilityState==='visible')loadStock(false);
     },15000);
-
-    const analysisTimer=setInterval(()=>{
-      if(document.visibilityState==='visible'){
-        loadV5();
-      }
-    },120000);
-
-    return()=>{
-      clearInterval(stockTimer);
-      clearInterval(analysisTimer);
-    };
+    return()=>clearInterval(stockTimer);
   },[symbol,period]);
 
   useEffect(()=>{loadSignals();},[horizon]);
@@ -275,7 +189,6 @@ export default function Home(){
   const state=stock?.technical?.state ?? '—';
   const stateColor=stock?.technical?.color || '#f8bd39';
   const selectedWatch=useMemo(()=>watch.find(x=>x.symbol===symbol),[watch,symbol]);
-  const displayCandles=useMemo(()=>simplifyCandles(stock?.candles ?? [],period),[stock?.candles,period]);
 
   const dataStatus=stock?.data_status ?? '—';
   const dataAge=stock?.data_age_minutes;
@@ -325,9 +238,9 @@ export default function Home(){
 
       <div className="workspace">
         <div className="charts">
-          <div className="panel chartPanel"><div className="chartTitle"><b>{symbol}.IS • {period}</b><span>{loading?'Veri güncelleniyor...':`${displayCandles.length} mum${period==='1G' && (stock?.candles?.length ?? 0)>displayCandles.length ? ' • sadeleştirilmiş' : ''}`}</span></div>{displayCandles.length?<PriceChart candles={displayCandles}/>:<div className="loading">Grafik verisi bekleniyor...</div>}</div>
+          <div className="panel chartPanel"><div className="chartTitle"><b>{symbol}.IS • {period}</b><span>{loading?'Veri güncelleniyor...':`${stock?.candles?.length ?? 0} mum`}</span></div>{stock?.candles?.length?<PriceChart candles={stock.candles}/>:<div className="loading">Grafik verisi bekleniyor...</div>}</div>
           <div className="analysisTabs">{analyses.map(a=><button key={a} className={analysis===a?'active':''} onClick={()=>setAnalysis(a)}>{a}</button>)}</div>
-          <div className="panel analysisPanel">{displayCandles.length?<AnalysisChart candles={displayCandles} mode={analysis}/>:null}</div>
+          <div className="panel analysisPanel">{stock?.candles?.length?<AnalysisChart candles={stock.candles} mode={analysis}/>:null}</div>
         </div>
 
         <aside className="rightRail">
@@ -336,7 +249,6 @@ export default function Home(){
           <div className="panel"><h3>Teknik Seviyeler</h3><Row k="● Destek" v={stock?.support} green/><Row k="● Direnç" v={stock?.resistance} red/></div>
           <div className="panel"><h3>Hacim Kalitesi</h3><Row k="Hacim Skoru" v={stock?.volume_analysis?.score}/><Row k="RVOL" v={stock?.volume_analysis?.rvol}/><Row k="MFI" v={stock?.volume_analysis?.mfi}/><Row k="CMF" v={stock?.volume_analysis?.cmf}/><p className="reason">• {stock?.volume_analysis?.state ?? '—'}</p>{stock?.volume_analysis?.reasons?.slice(0,3).map((r:string)=><p className="reason" key={r}>• {r}</p>)}</div>
           <div className="panel"><h3>Piyasa Rejimi</h3><div className="stateBox"><span>BIST yönü</span><b className={stock?.market_regime?.positive?'green':'red'}>{stock?.market_regime?.state ?? '—'}</b></div><p className="reason">{stock?.market_regime?.reason ?? 'Endeks verisi bekleniyor'}</p><div className="stateBox"><span>V4 teyit</span><b className={stock?.v4_signal==='GÜÇLÜ TEKNİK TEYİT'?'green':''}>{stock?.v4_signal ?? '—'}</b></div></div>
-          <div className="panel"><h3>V5 Erken Hareket</h3><div className="stateBox"><span>Sinyal</span><b className={(v5?.v5?.signal==='BREAKOUT'||v5?.v5?.signal==='GUCLU_TEKNIK_TEYIT')?'green':''}>{v5?.v5?.signal ?? '—'}</b></div><Row k="Erken Hareket Skoru" v={v5?.v5?.early_move_score}/><Row k="RVOL" v={v5?.v5?.rvol}/>{v5?.v5?.reasons?.slice(0,4).map((r:string)=><p className="reason" key={r}>• {r}</p>)}</div>
           <div className="panel"><h3>Kısa Teknik Yorum</h3>{stock?.technical?.reasons?.slice(0,5).map((r:string)=><p className="reason" key={r}>• {r}</p>)}</div>
         </aside>
       </div>
@@ -344,45 +256,6 @@ export default function Home(){
       <div className="metricGrid"><Metric k="Teknik Skor" v={`${score.toFixed?.(1) ?? score}/10`}/><Metric k="Hacim Skoru" v={stock?.volume_analysis?.score==null?'—':`${Number(stock.volume_analysis.score).toFixed(1)}/10`}/><Metric k="RVOL" v={last?.rvol==null?'—':`${Number(last.rvol).toFixed(2)}x`}/><Metric k="MFI" v={fmt(last?.mfi)}/><Metric k="CMF" v={last?.cmf==null?'—':Number(last.cmf).toFixed(3)}/><Metric k="RSI" v={fmt(last?.rsi)}/><Metric k="ATR" v={fmt(last?.atr)}/><Metric k="Piyasa" v={stock?.market_regime?.state ?? '—'}/></div>
 
       <section className="panel scanner"><div className="sectionTitle"><div><h2>BIST 30 Fırsat Tarayıcı</h2><p>Teknik skoru yüksek hisseleri hızlıca görün.</p></div></div><div className="table"><div className="tr head"><span>Hisse</span><span>Fiyat</span><span>Değişim</span><span>Skor</span><span>RSI</span><span>Hacim</span><span>Destek</span><span>Direnç</span><span>Durum</span></div>{scan.map(x=><div className="tr" key={x.symbol} onClick={()=>{setSymbol(x.symbol);setMobileMenuOpen(false)}}><span><b>{x.symbol}</b></span><span>{x.price.toFixed(2)} ₺</span><span className={x.change_pct>=0?'green':'red'}>{x.change_pct>=0?'+':''}{x.change_pct.toFixed(2)}%</span><span>{x.score.toFixed(1)}</span><span>{x.rsi?.toFixed?.(1) ?? '—'}</span><span>{x.vol_ratio?.toFixed?.(2) ?? '—'}x</span><span>{x.support.toFixed(2)}</span><span>{x.resistance.toFixed(2)}</span><span>{x.state}</span></div>)}</div></section>
-
-      <section className="panel v9PaperBanner">
-        <div><b>V9 PAPER FORWARD TEST</b><span> Gerçek para emri yok — canlı sinyaller ve sonuçlar kaydediliyor.</span></div>
-        <div className="v9StatusRow">
-          <span>Piyasa: <b>{v9Status?.market_regime?.state ?? '—'}</b></span>
-          <span>Breadth: <b>{v9Status?.market_regime?.breadth_pct==null?'—':`%${v9Status.market_regime.breadth_pct}`}</b></span>
-          <span>Açık sinyal: <b>{v9Status?.open_positions ?? openPositions.length}</b></span>
-        </div>
-      </section>
-
-      <section className="panel performanceBanner">
-        <div><b>V10 Hız Modu</b><span> Ağır geçmiş testleri otomatik yüklenmez; günlük analizler seyrek, fiyat verisi hızlı yenilenir.</span></div>
-      </section>
-
-      <section className="panel openSignals">
-        <div className="signalHeader">
-          <div><h2>Açık V6 Sinyalleri</h2><p>BREAKOUT / güçlü teyit sonrası stop ve hedefleri otomatik takip eder.</p></div>
-          <div className="signalActions"><button onClick={loadOpenPositions}>Yenile</button></div>
-        </div>
-        <div className="tradeTableWrap">
-          <div className="v6Tr head"><span>Hisse</span><span>Sinyal</span><span>Giriş</span><span>Stop</span><span>Hedef 1</span><span>Hedef 2</span><span>Son</span><span>H1</span></div>
-          {openPositions.length?openPositions.map((p:any)=><div className="v6Tr" key={p.id} onClick={()=>setSymbol(p.symbol)}>
-            <b>{p.symbol}</b><span>{p.signal_type}</span><span>{fmt(p.entry_price)} ₺</span><span className="red">{fmt(p.stop_price)} ₺</span><span>{fmt(p.target1_price)} ₺</span><span className="green">{fmt(p.target2_price)} ₺</span><span>{p.last_price==null?'—':`${fmt(p.last_price)} ₺`}</span><span>{p.target1_hit?'✓':'—'}</span>
-          </div>):<div className="emptySignals">Şu anda açık V6 sinyali yok.</div>}
-        </div>
-      </section>
-
-      <section className="panel tradeHistory">
-        <div className="signalHeader">
-          <div><h2>Geçmiş V4 İşlemleri</h2><p>V4'ün geçmişte verdiği AL adayları ve stop/hedef/zaman çıkışları.</p></div>
-          <div className="signalActions"><button onClick={loadTradeHistory}>{tradeHistoryLoading?"Yükleniyor...":"Geçmişi Yükle"}</button></div>
-        </div>
-        <div className="tradeTableWrap">
-          <div className="tradeTr head"><span>Hisse</span><span>AL tarihi</span><span>Giriş</span><span>Çıkış tarihi</span><span>Çıkış</span><span>Neden</span><span>Getiri</span><span>Skor</span><span>Hacim</span></div>
-          {tradeHistory.length?tradeHistory.map((t:any,i:number)=><div className="tradeTr" key={`${t.symbol}-${t.entry_date}-${i}`} onClick={()=>setSymbol(t.symbol)}>
-            <b>{t.symbol}</b><span>{t.entry_date}</span><span>{fmt(t.entry_price)} ₺</span><span>{t.exit_date}</span><span>{fmt(t.exit_price)} ₺</span><span>{t.exit_reason==='TARGET'?'HEDEF':t.exit_reason==='STOP'?'STOP':'ZAMAN'}</span><b className={Number(t.net_return_pct)>=0?'green':'red'}>{Number(t.net_return_pct)>=0?'+':''}{Number(t.net_return_pct).toFixed(2)}%</b><span>{Number(t.quality_score).toFixed(2)}</span><span>{Number(t.volume_score).toFixed(2)}</span>
-          </div>):<div className="emptySignals">{tradeHistoryLoading?'Geçmiş işlemler hesaplanıyor...':'Geçmiş işlem bulunamadı.'}</div>}
-        </div>
-      </section>
 
       <section className="panel signalHistory">
         <div className="signalHeader">
