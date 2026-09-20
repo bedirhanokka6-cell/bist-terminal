@@ -1190,3 +1190,308 @@ def backtest_v2(
             'Haber/KAP faktörü bu testte henüz yoktur; önce teknik çekirdek ayrı doğrulanır.',
         ],
     }
+
+
+# ==========================================================
+# V3 RISK YONETIMI BACKTEST
+# ==========================================================
+
+def _simulate_trade_path(
+    a: pd.DataFrame,
+    pos: int,
+    stop_price: float,
+    target_price: float,
+    max_hold_days: int,
+    cost_pct: float,
+):
+    """
+    Günlük OHLC ile muhafazakâr trade simülasyonu.
+    Giriş sinyal gününün kapanış fiyatıdır.
+    Stop/target kontrolü bir sonraki işlem gününden başlar.
+    Aynı gün hem stop hem hedef görülürse sıralama bilinmediği için STOP önce kabul edilir.
+    """
+    entry = float(a['Close'].iloc[pos])
+
+    exit_price = None
+    exit_day = None
+    exit_reason = None
+
+    last_pos = min(len(a) - 1, pos + max_hold_days)
+    for j in range(pos + 1, last_pos + 1):
+        low = float(a['Low'].iloc[j])
+        high = float(a['High'].iloc[j])
+
+        stop_hit = low <= stop_price
+        target_hit = high >= target_price
+
+        if stop_hit and target_hit:
+            exit_price = stop_price
+            exit_day = j - pos
+            exit_reason = 'STOP_SAME_DAY'
+            break
+        if stop_hit:
+            exit_price = stop_price
+            exit_day = j - pos
+            exit_reason = 'STOP'
+            break
+        if target_hit:
+            exit_price = target_price
+            exit_day = j - pos
+            exit_reason = 'TARGET'
+            break
+
+    if exit_price is None:
+        exit_price = float(a['Close'].iloc[last_pos])
+        exit_day = last_pos - pos
+        exit_reason = 'TIME'
+
+    gross = ((exit_price / entry) - 1.0) * 100.0
+    net = gross - cost_pct
+    risk_pct = ((entry - stop_price) / entry) * 100.0
+    r_multiple = net / risk_pct if risk_pct > 0 else None
+
+    return {
+        'net_return_pct': float(net),
+        'exit_day': int(exit_day),
+        'exit_reason': exit_reason,
+        'risk_pct': float(risk_pct),
+        'r_multiple': float(r_multiple) if r_multiple is not None else None,
+    }
+
+
+@app.get('/api/backtest/v3-risk')
+def backtest_v3_risk(
+    test_days: int = Query(default=504, ge=252, le=756),
+    min_score: float = Query(default=8.25, ge=7.25, le=10.0),
+    cost_bps: int = Query(default=20, ge=0, le=100),
+    cooldown_days: int = Query(default=5, ge=1, le=20),
+    max_hold_days: int = Query(default=10, ge=3, le=20),
+    fixed_stop_pct: float = Query(default=3.0, ge=1.0, le=10.0),
+    atr_mult: float = Query(default=1.75, ge=0.75, le=4.0),
+    reward_r: float = Query(default=2.0, ge=1.0, le=4.0),
+):
+    """
+    V3 risk yönetimi karşılaştırması.
+    Sadece seçici AL eventleri kullanılır.
+
+    Karşılaştırılan yöntemler:
+    - baseline_time: stop/target yok, max_hold sonunda çıkış
+    - fixed_stop_2r: sabit yüzde stop + 2R hedef
+    - atr_stop_2r: ATR tabanlı stop + 2R hedef
+    - support_stop_2r: önceki 20 günlük destek altı stop + 2R hedef
+
+    Veriyi development/validation olarak tarihe göre ikiye böler.
+    """
+    from .analysis_v2 import indicators_v2, quality_score_series
+
+    tickers = [s + '.IS' for s in BIST30]
+    cost_pct = cost_bps / 100.0
+
+    try:
+        raw = yf.download(
+            tickers=tickers,
+            period='5y',
+            interval='1d',
+            auto_adjust=False,
+            progress=False,
+            threads=True,
+            group_by='ticker',
+        )
+    except Exception as exc:
+        raise HTTPException(503, f'V3 backtest verisi alınamadı: {exc}')
+
+    rows = []
+
+    for symbol in BIST30:
+        ticker = symbol + '.IS'
+        try:
+            if isinstance(raw.columns, pd.MultiIndex):
+                if ticker not in raw.columns.get_level_values(0):
+                    continue
+                d = raw[ticker].copy()
+            else:
+                d = raw.copy()
+
+            d = d.dropna(subset=['Open','High','Low','Close'])
+            if len(d) < 320:
+                continue
+
+            a = quality_score_series(indicators_v2(d))
+
+            # Yüksek kalite eşiğini ayrıca uygula.
+            selected = a['QUALITY_GATE'] & (a['QUALITY_SCORE'] >= min_score)
+
+            start_pos = max(220, len(a) - test_days)
+            end_pos = len(a) - max_hold_days - 1
+
+            last_event_pos = -10000
+            prev_selected = False
+
+            for pos in range(start_pos, end_pos + 1):
+                is_selected = bool(selected.iloc[pos])
+                new_event = is_selected and (not prev_selected) and (pos - last_event_pos >= cooldown_days)
+                prev_selected = is_selected
+
+                if not new_event:
+                    continue
+
+                entry = float(a['Close'].iloc[pos])
+                atr = float(a['ATR'].iloc[pos]) if pd.notna(a['ATR'].iloc[pos]) else None
+                prior_low = float(a['PRIOR_LOW20'].iloc[pos]) if pd.notna(a['PRIOR_LOW20'].iloc[pos]) else None
+
+                if atr is None or atr <= 0:
+                    continue
+
+                # 1) baseline time-exit
+                baseline_exit = float(a['Close'].iloc[pos + max_hold_days])
+                baseline_net = ((baseline_exit / entry) - 1.0) * 100.0 - cost_pct
+
+                # 2) fixed stop
+                fixed_stop = entry * (1.0 - fixed_stop_pct / 100.0)
+                fixed_risk = entry - fixed_stop
+                fixed_target = entry + reward_r * fixed_risk
+
+                # 3) ATR stop
+                atr_stop = entry - atr_mult * atr
+                # Mantıksız aşırı dar/geniş riskleri clamp et.
+                atr_risk_pct = ((entry - atr_stop) / entry) * 100.0
+                atr_risk_pct = min(max(atr_risk_pct, 1.0), 7.0)
+                atr_stop = entry * (1.0 - atr_risk_pct / 100.0)
+                atr_target = entry + reward_r * (entry - atr_stop)
+
+                # 4) destek altı stop
+                if prior_low is None or prior_low >= entry:
+                    support_risk_pct = atr_risk_pct
+                else:
+                    raw_support_stop = prior_low - 0.25 * atr
+                    support_risk_pct = ((entry - raw_support_stop) / entry) * 100.0
+                    support_risk_pct = min(max(support_risk_pct, 1.0), 7.0)
+
+                support_stop = entry * (1.0 - support_risk_pct / 100.0)
+                support_target = entry + reward_r * (entry - support_stop)
+
+                fixed_res = _simulate_trade_path(
+                    a, pos, fixed_stop, fixed_target, max_hold_days, cost_pct
+                )
+                atr_res = _simulate_trade_path(
+                    a, pos, atr_stop, atr_target, max_hold_days, cost_pct
+                )
+                support_res = _simulate_trade_path(
+                    a, pos, support_stop, support_target, max_hold_days, cost_pct
+                )
+
+                rows.append({
+                    'symbol': symbol,
+                    'date': pd.Timestamp(a.index[pos]),
+                    'score': float(a['QUALITY_SCORE'].iloc[pos]),
+                    'entry': entry,
+                    'baseline_time': {
+                        'net_return_pct': float(baseline_net),
+                        'exit_day': int(max_hold_days),
+                        'exit_reason': 'TIME',
+                        'risk_pct': None,
+                        'r_multiple': None,
+                    },
+                    'fixed_stop_2r': fixed_res,
+                    'atr_stop_2r': atr_res,
+                    'support_stop_2r': support_res,
+                })
+
+                last_event_pos = pos
+
+        except Exception:
+            continue
+
+    if not rows:
+        raise HTTPException(503, 'V3 risk modeli için event üretilemedi')
+
+    dates = sorted({r['date'].date() for r in rows})
+    split_idx = max(1, len(dates) // 2)
+    split_date = pd.Timestamp(dates[split_idx])
+
+    strategies = ['baseline_time','fixed_stop_2r','atr_stop_2r','support_stop_2r']
+
+    def summarize(segment_rows):
+        out = []
+        for strategy in strategies:
+            vals = [r[strategy] for r in segment_rows]
+            rets = pd.Series([v['net_return_pct'] for v in vals], dtype='float64')
+
+            reasons = {}
+            for v in vals:
+                reasons[v['exit_reason']] = reasons.get(v['exit_reason'], 0) + 1
+
+            risks = [v['risk_pct'] for v in vals if v['risk_pct'] is not None]
+            rs = [v['r_multiple'] for v in vals if v['r_multiple'] is not None]
+
+            out.append({
+                'strategy': strategy,
+                'events': int(len(rets)),
+                'wins': int((rets > 0).sum()),
+                'losses': int((rets <= 0).sum()),
+                'success_rate_pct': round(float((rets > 0).mean()*100), 2),
+                'avg_net_return_pct': round(float(rets.mean()), 3),
+                'median_net_return_pct': round(float(rets.median()), 3),
+                'total_compounded_return_pct': round(
+                    float(((1 + rets/100.0).prod() - 1.0) * 100.0), 3
+                ),
+                'avg_risk_pct': round(float(pd.Series(risks).mean()), 3) if risks else None,
+                'avg_r_multiple': round(float(pd.Series(rs).mean()), 3) if rs else None,
+                'exit_reasons': reasons,
+            })
+        return out
+
+    dev_rows = [r for r in rows if r['date'] < split_date]
+    val_rows = [r for r in rows if r['date'] >= split_date]
+
+    # Validation'da hisse bazında ATR-stop performansı; küçük örnekleri ayır.
+    by_symbol = []
+    symbols = sorted({r['symbol'] for r in val_rows})
+    for symbol in symbols:
+        sr = [r for r in val_rows if r['symbol'] == symbol]
+        if len(sr) < 3:
+            continue
+        rets = pd.Series([r['atr_stop_2r']['net_return_pct'] for r in sr], dtype='float64')
+        by_symbol.append({
+            'symbol': symbol,
+            'events': int(len(sr)),
+            'success_rate_pct': round(float((rets > 0).mean()*100), 2),
+            'avg_net_return_pct': round(float(rets.mean()), 3),
+        })
+    by_symbol.sort(
+        key=lambda x: (x['events'] >= 5, x['avg_net_return_pct'], x['success_rate_pct']),
+        reverse=True
+    )
+
+    return {
+        'ok': True,
+        'model': 'quality_v3_risk_management',
+        'tested_current_bist30_symbols': len({r['symbol'] for r in rows}),
+        'event_count': len(rows),
+        'split_date': split_date.date().isoformat(),
+        'settings': {
+            'test_days': test_days,
+            'min_score': min_score,
+            'cost_bps': cost_bps,
+            'cooldown_days': cooldown_days,
+            'max_hold_days': max_hold_days,
+            'fixed_stop_pct': fixed_stop_pct,
+            'atr_mult': atr_mult,
+            'reward_r': reward_r,
+            'same_day_stop_and_target_rule': 'muhafazakar: stop önce kabul edilir',
+        },
+        'development': summarize(dev_rows),
+        'validation': summarize(val_rows),
+        'validation_atr_best_symbols': by_symbol[:10],
+        'interpretation_note': (
+            'Asıl karar validation sonuçlarına göre verilmelidir. '
+            'Başarı oranı tek başına yeterli değildir; ortalama/medyan net getiri ve R multiple birlikte değerlendirilmelidir.'
+        ),
+        'caveats': [
+            'Günlük OHLC verisi aynı gün stop/target sırasını göstermez; ikisi de görülürse stop önce varsayılır.',
+            'Current BIST30 composition geçmişe uygulanır; survivorship bias olabilir.',
+            'Yahoo Finance verisi kullanılır; resmi gerçek zamanlı BIST verisi değildir.',
+            'Backtest geçmiş performanstır; geleceği garanti etmez.',
+            'Haber/KAP katmanı bu V3 risk testinden sonra ayrı doğrulanacaktır.',
+        ],
+    }
