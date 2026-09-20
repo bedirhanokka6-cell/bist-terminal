@@ -6,7 +6,6 @@ import pandas as pd
 import yfinance as yf
 import os
 import time as pytime
-from urllib.request import Request, urlopen
 from datetime import datetime, time
 from zoneinfo import ZoneInfo
 from sqlalchemy.orm import Session
@@ -14,7 +13,6 @@ from sqlalchemy import func
 
 from .analysis import indicators, technical_state
 from .data import BIST30, load_chart
-from .news import COMPANY_NAMES, company_news, kap_notifications, article_image
 from .db import get_db
 from .models import Signal, SignalResult, NotificationToken, NotificationEvent, OpenSignalPosition
 from .signal_service import create_signal_from_analysis, evaluate_signal, serialize_signal, serialize_result
@@ -425,88 +423,6 @@ def scanner(min_score: float = 0):
         key=lambda x: (x['score'], x['change_pct']),
         reverse=True
     )
-
-@app.get('/api/news/{symbol}')
-def news(symbol: str, limit: int = Query(default=20, ge=5, le=50)):
-    cache_key = f'news:{symbol.upper()}:{limit}'
-    cached = _cache_get(cache_key, 300)
-    if cached is not None:
-        return cached
-    symbol = symbol.upper().replace('.IS', '')
-    if symbol not in BIST30:
-        raise HTTPException(404, 'BIST30 içinde hisse bulunamadı')
-
-    news_rows = company_news(symbol, limit=limit)
-    kap_rows = kap_notifications(symbol, limit=min(limit, 20))
-
-    merged = sorted(
-        [*news_rows, *kap_rows],
-        key=lambda x: x.get('published_at') or '',
-        reverse=True,
-    )
-
-    response = {
-        'symbol': symbol,
-        'company': COMPANY_NAMES.get(symbol, symbol) if 'COMPANY_NAMES' in globals() else symbol,
-        'news': news_rows,
-        'kap': kap_rows,
-        'all': merged,
-        'counts': {
-            'news': len(news_rows),
-            'kap': len(kap_rows),
-            'all': len(merged),
-        },
-        'source_note': 'Haberler ücretsiz RSS kaynaklarından derlenir. KAP bölümü kap.org.tr alanına indekslenen sonuçları gösterir; resmi KAP ekranı esas kaynaktır.',
-        'official_kap_url': 'https://www.kap.org.tr/tr/bildirim-sorgu',
-    }
-    return _cache_set(cache_key, response)
-
-
-
-
-
-@app.get('/api/news/image-meta')
-def news_image_meta(url: str):
-    if not url.startswith(('http://', 'https://')):
-        raise HTTPException(400, 'Geçersiz haber adresi')
-    try:
-        img = article_image(url)
-        return {'image_url': img}
-    except Exception:
-        return {'image_url': None}
-
-@app.get('/api/news/image')
-def proxy_news_image(url: str):
-    """
-    Haber kartındaki gerçek haber fotoğrafını backend üzerinden geçirir.
-    Hotlink/referrer engeli olan haber sitelerinde de resmi göstermeye çalışır.
-    """
-    if not url.startswith(('http://', 'https://')):
-        raise HTTPException(400, 'Geçersiz görsel adresi')
-
-    try:
-        req = Request(
-            url,
-            headers={
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36',
-                'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
-                'Referer': url,
-            },
-        )
-        with urlopen(req, timeout=8) as res:
-            ctype = res.headers.get('Content-Type', 'image/jpeg')
-            if not ctype.startswith('image/'):
-                raise HTTPException(415, 'Uzak adres görsel döndürmedi')
-            body = res.read(5_000_000)
-            return Response(
-                content=body,
-                media_type=ctype,
-                headers={'Cache-Control': 'public, max-age=3600'},
-            )
-    except HTTPException:
-        raise
-    except Exception as exc:
-        raise HTTPException(502, f'Görsel alınamadı: {exc}')
 
 # ==========================================================
 # SİNYAL KAYDI + GEÇMİŞ + BAŞARI TAKİBİ
@@ -4252,9 +4168,7 @@ def performance_status():
         'cache_items': len(_RUNTIME_CACHE),
         'optimizations': [
             'BIST30 45sn cache',
-            'Haberler 5dk cache',
             'V9 piyasa rejimi 5dk cache',
-            'Haber görselleri arkaplanda',
             'Geçmiş backtest ilk açılışta yüklenmez',
             'Tarayıcı yenileme aralıkları azaltıldı',
         ]

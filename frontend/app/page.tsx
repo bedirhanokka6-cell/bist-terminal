@@ -8,7 +8,6 @@ type Stock={symbol:string;price:number;change_pct:number;sparkline?:number[]};
 type Scanner={symbol:string;price:number;change_pct:number;score:number;state:string;rsi:number|null;vol_ratio:number|null;support:number;resistance:number};
 type SignalItem={id:number;symbol:string;signal_type:string;score:number;state:string;price:number;support:number|null;resistance:number|null;reasons:string[];created_at:string|null};
 type SignalStats={horizon_days:number;evaluated_total:number;directional_total:number;successful:number;failed:number;success_rate_pct:number|null;average_return_pct:number|null;note:string};
-type NewsItem={title:string;url:string;source:string;published_at:string|null;kind:'HABER'|'KAP';impact_score?:number;impact_label?:string;impact_reason?:string;image_url?:string|null};
 
 const API=process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 const periods=['1G','5G','1A','3A','6A','1Y','2Y'];
@@ -37,14 +36,6 @@ export default function Home(){
   const [openPositions,setOpenPositions]=useState<any[]>([]);
   const [v9Status,setV9Status]=useState<any>(null);
   const [mobileMenuOpen,setMobileMenuOpen]=useState(false);
-  const [activeView,setActiveView]=useState<'analysis'|'news'>('analysis');
-  const [newsTab,setNewsTab]=useState<'ALL'|'HABER'|'KAP'>('ALL');
-  const [newsItems,setNewsItems]=useState<NewsItem[]>([]);
-  const [newsLoading,setNewsLoading]=useState(false);
-  const [newsError,setNewsError]=useState('');
-  const [newsNote,setNewsNote]=useState('');
-  const [newsCounts,setNewsCounts]=useState({all:0,news:0,kap:0});
-  const [newsImages,setNewsImages]=useState<Record<string,string>>({});
 
 
   const loadSignals=async()=>{
@@ -105,40 +96,7 @@ export default function Home(){
     }catch{}
   };
 
-  const loadNews=async(showLoading=true)=>{
-    if(showLoading)setNewsLoading(true);
-    setNewsError('');
-    try{
-      const r=await fetch(`${API}/api/news/${symbol}?limit=25`,{cache:'default'});
-      const j=await r.json();
-      if(!r.ok)throw new Error(j?.detail||'Haberler alınamadı');
-      const items=j?.all ?? [];
-      setNewsItems(items);
-      setTimeout(()=>resolveNewsImages(items),500);
-      setNewsNote(j?.source_note ?? '');
-      setNewsCounts(j?.counts ?? {all:0,news:0,kap:0});
-    }catch(e:any){
-      setNewsError(e?.message||'Haberler alınamadı');
-    }finally{
-      if(showLoading)setNewsLoading(false);
-    }
-  };
 
-  const resolveNewsImages=async(items:NewsItem[])=>{
-    const subset=(items||[]).slice(0,6);
-    for(let i=0;i<subset.length;i++){
-      const n=subset[i];
-      if(!n?.url || newsImages[n.url])continue;
-      try{
-        const r=await fetch(`${API}/api/news/image-meta?url=${encodeURIComponent(n.url)}`,{cache:'force-cache'});
-        if(r.ok){
-          const j=await r.json();
-          if(j?.image_url)setNewsImages(prev=>({...prev,[n.url]:j.image_url}));
-        }
-      }catch{}
-      await new Promise(res=>setTimeout(res,180));
-    }
-  };
 
   const loadTradeHistory=async()=>{
     if(tradeHistoryLoading)return;
@@ -180,9 +138,6 @@ export default function Home(){
   },[symbol,period]);
 
   useEffect(()=>{loadSignals();},[horizon]);
-  useEffect(()=>{
-    if(activeView==='news')loadNews(true);
-  },[activeView,symbol]);
 
 
   const saveCurrentSignal=async()=>{
@@ -311,10 +266,7 @@ export default function Home(){
     {mobileMenuOpen?<button className="mobileBackdrop" onClick={()=>setMobileMenuOpen(false)} aria-label="Menüyü kapat"/>:null}
 
     <section className="mainArea">
-      <header className="topnav"><button className="mobileMenuBtn" onClick={()=>setMobileMenuOpen(true)}>☰ BIST 30</button><div className="brand">▮▮▮ <b>BIST TERMINAL</b></div><nav>
-          <button className={activeView==='analysis'?'navItem active':''} onClick={()=>setActiveView('analysis')}>Hisse Analizi</button>
-          <button className={activeView==='news'?'navItem active':''} onClick={()=>setActiveView('news')}>Haberler (KAP)</button>
-        </nav><div style={{display:'flex',gap:'8px',alignItems:'center'}}>
+      <header className="topnav"><button className="mobileMenuBtn" onClick={()=>setMobileMenuOpen(true)}>☰ BIST 30</button><div className="brand">▮▮▮ <b>BIST TERMINAL</b></div><nav><span className="active">Hisse Analizi</span></nav><div style={{display:'flex',gap:'8px',alignItems:'center'}}>
           <button onClick={enableNotifications} style={{padding:'7px 10px',borderRadius:'7px',border:'1px solid #24445f',background:'#123451',color:'#fff',cursor:'pointer'}}>
             🔔 Bildirimleri Aç
           </button>
@@ -322,78 +274,6 @@ export default function Home(){
           <span style={{fontSize:'11px',color:pushStatus==='Bildirim açık'?'#32d296':'#9aa4b2'}}>{pushStatus}</span>
           <span className="perfBadge">⚡ V16 HIZLI</span><div className="market">● Piyasa Takip</div>
         </div></header>
-
-      {activeView==='news'?<section className="newsPage">
-        <div className="panel newsHero">
-          <div>
-            <span className="muted">HABER MERKEZİ</span>
-            <h1>{symbol} Haberleri & KAP</h1>
-            <p>Seçili hisseyle ilgili haberleri ve KAP alanına indekslenen duyuruları tek ekranda takip et.</p>
-          </div>
-          <div className="newsHeroActions">
-            <button onClick={()=>loadNews(true)} disabled={newsLoading}>{newsLoading?'Yükleniyor...':'↻ Yenile'}</button>
-            <a href="https://www.kap.org.tr/tr/bildirim-sorgu" target="_blank" rel="noreferrer">Resmi KAP ↗</a>
-          </div>
-        </div>
-
-        <div className="newsControls panel">
-          <div className="newsSymbolStrip">
-            {watch.map(x=><button key={x.symbol} className={x.symbol===symbol?'active':''} onClick={()=>setSymbol(x.symbol)}>{x.symbol}</button>)}
-          </div>
-          <div className="newsTabs">
-            <button className={newsTab==='ALL'?'active':''} onClick={()=>setNewsTab('ALL')}>Tümü <b>{newsCounts.all}</b></button>
-            <button className={newsTab==='HABER'?'active':''} onClick={()=>setNewsTab('HABER')}>Haber <b>{newsCounts.news}</b></button>
-            <button className={newsTab==='KAP'?'active':''} onClick={()=>setNewsTab('KAP')}>KAP <b>{newsCounts.kap}</b></button>
-          </div>
-        </div>
-
-        {newsError?<div className="panel newsError">{newsError}</div>:null}
-        <div className="newsGrid">
-          {(newsItems.filter((n:any)=>newsTab==='ALL'||n.kind===newsTab)).map((n:any,i:number)=>
-            <a className="newsCard panel" href={n.url} target="_blank" rel="noreferrer" key={`${n.kind}-${n.title}-${i}`}>
-              <div className="newsCardBody">
-                <div className="newsMeta">
-                  <span className={`newsKind ${n.kind==='KAP'?'kap':''}`}>{n.kind}</span>
-                  <span>{n.source||'Kaynak'}</span>
-                  <span>•</span>
-                  <span>{formatNewsDate(n.published_at)}</span>
-                </div>
-                <h3>{n.title}</h3>
-                <p className="newsImpactReason">{n.impact_reason || 'Haber başlığına göre otomatik etki değerlendirmesi.'}</p>
-                <div className="newsBottom">
-                  <span className={`impactBadge ${impactClass(n.impact_label)}`}>Olası Etki: {n.impact_label || 'NÖTR'}</span>
-                  <span className="impactScore">Etki Skoru: {n.impact_score==null?'—':`${Number(n.impact_score).toFixed(1)}/10`}</span>
-                  <span className="newsSource">Kaynak: {n.source||'—'}</span>
-                </div>
-              </div>
-              <div className={`newsThumb ${n.kind==='KAP'?'kapThumb':''}`}>
-                {(newsImages[n.url]||n.image_url)?
-                  <img
-                    src={`${API}/api/news/image?url=${encodeURIComponent(newsImages[n.url]||n.image_url)}`}
-                    alt={n.title}
-                    loading="lazy"
-                    onError={(e:any)=>{
-                      e.currentTarget.style.display='none';
-                      e.currentTarget.parentElement?.classList.add('imageFailed');
-                    }}
-                  />
-                  :null}
-                <div className="thumbFallback">
-                  <div className="thumbBars"><i/><i/><i/><i/></div>
-                  <span>{n.kind==='KAP'?'KAP':'BIST'}</span>
-                </div>
-              </div>
-              <span className="newsOpen">↗</span>
-            </a>
-          )}
-        </div>
-
-        {!newsLoading && !newsError && !newsItems.filter((n:any)=>newsTab==='ALL'||n.kind===newsTab).length?
-          <div className="panel emptyNews">Bu filtrede sonuç bulunamadı. Biraz sonra tekrar yenileyebilirsin.</div>:null}
-        {newsLoading?<div className="panel emptyNews">Haberler getiriliyor...</div>:null}
-        <div className="newsFootnote">{newsNote}</div>
-      </section>:<>
-
       <div className="periods">{periods.map(p=><button className={period===p?'active':''} onClick={()=>setPeriod(p)} key={p}>{p}</button>)}</div>
       <section className="company">
         <div className="badge">{symbol.slice(0,3)}</div>
@@ -491,7 +371,6 @@ export default function Home(){
           {signals.length?signals.map(s=><div className="signalTr" key={s.id} onClick={()=>setSymbol(s.symbol)}><span>{formatDate(s.created_at)}</span><span><b>{s.symbol}</b></span><span><i className={`signalBadge ${signalClass(s.signal_type)}`}>{s.signal_type}</i></span><span>{fmt(s.price)} ₺</span><span>{Number(s.score).toFixed(1)}</span><span>{s.state}</span><span>{fmt(s.support)}</span><span>{fmt(s.resistance)}</span></div>):<div className="emptySignals">Henüz kayıtlı sinyal yok. Sağdaki “Bu analizi sinyal olarak kaydet” düğmesini kullanabilirsin.</div>}
         </div>
       </section>
-      </>}
     </section>
   </main>
 }
@@ -517,10 +396,4 @@ function signalClass(v:string){return v==='AL'?'buy':v==='SAT'?'sell':'wait'}
 function formatDate(v:string|null){if(!v)return '—';try{return new Intl.DateTimeFormat('tr-TR',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'}).format(new Date(v))}catch{return v}}
 function formatDataTime(v:string){try{return new Intl.DateTimeFormat('tr-TR',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit'}).format(new Date(v))}catch{return v}}
 
-function formatNewsDate(v:string|null){if(!v)return '—';try{return new Intl.DateTimeFormat('tr-TR',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'}).format(new Date(v))}catch{return v}}
 
-function impactClass(v:string|undefined){
-  if(v==='GÜÇLÜ OLUMLU'||v==='OLUMLU')return 'positive';
-  if(v==='GÜÇLÜ OLUMSUZ'||v==='OLUMSUZ')return 'negative';
-  return 'neutral';
-}
