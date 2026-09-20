@@ -1,10 +1,11 @@
-from fastapi import FastAPI, HTTPException, Depends, Query, Header
+from fastapi import FastAPI, HTTPException, Depends, Query, Header, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import numpy as np
 import pandas as pd
 import yfinance as yf
 import os
+from urllib.request import Request, urlopen
 from datetime import datetime, time
 from zoneinfo import ZoneInfo
 from sqlalchemy.orm import Session
@@ -196,10 +197,12 @@ def bist30():
 
                 p = float(closes.iloc[-1])
                 prev = float(closes.iloc[-2])
+                spark = [round(float(v), 4) for v in closes.tail(24).tolist()]
                 rows.append({
                     'symbol': s,
                     'price': p,
                     'change_pct': ((p / prev) - 1) * 100 if prev else 0,
+                    'sparkline': spark,
                 })
             except Exception:
                 continue
@@ -213,10 +216,13 @@ def bist30():
                     continue
                 p = float(d['Close'].iloc[-1])
                 prev = float(d['Close'].iloc[-2])
+                closes = pd.to_numeric(d['Close'], errors='coerce').dropna()
+                spark = [round(float(v), 4) for v in closes.tail(24).tolist()]
                 rows.append({
                     'symbol': s,
                     'price': p,
                     'change_pct': ((p / prev) - 1) * 100 if prev else 0,
+                    'sparkline': spark,
                 })
             except Exception:
                 continue
@@ -418,6 +424,41 @@ def news(symbol: str, limit: int = Query(default=20, ge=5, le=50)):
         'source_note': 'Haberler ücretsiz RSS kaynaklarından derlenir. KAP bölümü kap.org.tr alanına indekslenen sonuçları gösterir; resmi KAP ekranı esas kaynaktır.',
         'official_kap_url': 'https://www.kap.org.tr/tr/bildirim-sorgu',
     }
+
+
+
+@app.get('/api/news/image')
+def proxy_news_image(url: str):
+    """
+    Haber kartındaki gerçek haber fotoğrafını backend üzerinden geçirir.
+    Hotlink/referrer engeli olan haber sitelerinde de resmi göstermeye çalışır.
+    """
+    if not url.startswith(('http://', 'https://')):
+        raise HTTPException(400, 'Geçersiz görsel adresi')
+
+    try:
+        req = Request(
+            url,
+            headers={
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36',
+                'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
+                'Referer': url,
+            },
+        )
+        with urlopen(req, timeout=8) as res:
+            ctype = res.headers.get('Content-Type', 'image/jpeg')
+            if not ctype.startswith('image/'):
+                raise HTTPException(415, 'Uzak adres görsel döndürmedi')
+            body = res.read(5_000_000)
+            return Response(
+                content=body,
+                media_type=ctype,
+                headers={'Cache-Control': 'public, max-age=3600'},
+            )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(502, f'Görsel alınamadı: {exc}')
 
 # ==========================================================
 # SİNYAL KAYDI + GEÇMİŞ + BAŞARI TAKİBİ

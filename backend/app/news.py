@@ -83,6 +83,7 @@ def _extract_og_image(url: str) -> str | None:
         return _IMAGE_CACHE[url]
 
     try:
+        # Google News RSS linki çoğu zaman yayıncının gerçek haber sayfasına yönlenir.
         req = Request(
             url,
             headers={
@@ -90,28 +91,41 @@ def _extract_og_image(url: str) -> str | None:
                 "Accept": "text/html,application/xhtml+xml",
             },
         )
-        with urlopen(req, timeout=4) as res:
-            content_type = res.headers.get("Content-Type", "")
-            if "text/html" not in content_type:
-                _IMAGE_CACHE[url] = None
-                return None
-            body = res.read(350_000).decode("utf-8", errors="ignore")
+        with urlopen(req, timeout=7) as res:
+            final_url = res.geturl()
+            body = res.read(600_000).decode("utf-8", errors="ignore")
 
-        patterns = [
-            r'<meta[^>]+property=["\']og:image["\'][^>]+content=["\']([^"\']+)["\']',
-            r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+property=["\']og:image["\']',
-            r'<meta[^>]+name=["\']twitter:image["\'][^>]+content=["\']([^"\']+)["\']',
-            r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+name=["\']twitter:image["\']',
-        ]
-        for p in patterns:
-            m = re.search(p, body, re.I)
-            if m:
-                img = html_lib.unescape(m.group(1)).strip()
-                if img.startswith("//"):
-                    img = "https:" + img
-                if img.startswith("http://") or img.startswith("https://"):
-                    _IMAGE_CACHE[url] = img
-                    return img
+        def find_og(html_text: str):
+            pats = [
+                r'<meta[^>]+property=["\']og:image(?::secure_url)?["\'][^>]+content=["\']([^"\']+)["\']',
+                r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+property=["\']og:image(?::secure_url)?["\']',
+                r'<meta[^>]+name=["\']twitter:image(?::src)?["\'][^>]+content=["\']([^"\']+)["\']',
+                r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+name=["\']twitter:image(?::src)?["\']',
+            ]
+            for p in pats:
+                m = re.search(p, html_text, re.I)
+                if m:
+                    img = html_lib.unescape(m.group(1)).strip()
+                    if img.startswith("//"):
+                        img = "https:" + img
+                    if img.startswith(("http://", "https://")):
+                        return img
+            return None
+
+        img = find_og(body)
+        if img:
+            _IMAGE_CACHE[url] = img
+            return img
+
+        # Bazen yönlendirme sonrası HTML'de ilk büyük haber resmi bulunur.
+        candidates = re.findall(r'<img[^>]+(?:src|data-src)=["\'](https?://[^"\']+)["\']', body, re.I)
+        for img in candidates:
+            low = img.lower()
+            if any(x in low for x in ['logo', 'icon', 'avatar', 'sprite', 'favicon']):
+                continue
+            _IMAGE_CACHE[url] = html_lib.unescape(img)
+            return _IMAGE_CACHE[url]
+
     except Exception:
         pass
 

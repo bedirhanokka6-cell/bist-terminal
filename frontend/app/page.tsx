@@ -4,7 +4,7 @@ import {PriceChart, AnalysisChart} from '../components/StockChart';
 import {initializeApp, getApps} from 'firebase/app';
 import {getMessaging, getToken, onMessage, isSupported} from 'firebase/messaging';
 
-type Stock={symbol:string;price:number;change_pct:number};
+type Stock={symbol:string;price:number;change_pct:number;sparkline?:number[]};
 type Scanner={symbol:string;price:number;change_pct:number;score:number;state:string;rsi:number|null;vol_ratio:number|null;support:number;resistance:number};
 type SignalItem={id:number;symbol:string;signal_type:string;score:number;state:string;price:number;support:number|null;resistance:number|null;reasons:string[];created_at:string|null};
 type SignalStats={horizon_days:number;evaluated_total:number;directional_total:number;successful:number;failed:number;success_rate_pct:number|null;average_return_pct:number|null;note:string};
@@ -283,8 +283,8 @@ export default function Home(){
   return <main className="appShell">
     <aside className={`sidebar ${mobileMenuOpen?'open':''}`}>
       <div className="sidebarTop"><div className="brand">▮▮▮ <b>BIST TERMINAL</b></div><button className="mobileCloseBtn" onClick={()=>setMobileMenuOpen(false)} aria-label="Menüyü kapat">✕</button></div><h3>BIST 30</h3>
-      <div className="watchHead"><span>Hisse</span><span>Fiyat</span><span>Değişim</span></div>
-      <div className="watchList">{watch.map(x=><button key={x.symbol} className={`watchRow ${x.change_pct>=0?'up':'down'} ${x.symbol===symbol?'active':''}`} onClick={()=>{setSymbol(x.symbol);setMobileMenuOpen(false)}}><span><i>{x.change_pct>=0?'▲':'▼'}</i>{x.symbol}</span><b>{x.price.toFixed(2)}</b><em>{x.change_pct>=0?'+':''}{x.change_pct.toFixed(2)}%</em></button>)}</div>
+      <div className="watchHead"><span>Hisse</span><span>Mini Grafik</span><span>Fiyat</span><span>Değişim</span></div>
+      <div className="watchList">{watch.map(x=><button key={x.symbol} className={`watchRow ${x.change_pct>=0?'up':'down'} ${x.symbol===symbol?'active':''}`} onClick={()=>{setSymbol(x.symbol);setMobileMenuOpen(false)}}><span><i>{x.change_pct>=0?'▲':'▼'}</i>{x.symbol}</span><Sparkline values={x.sparkline||[]} positive={x.change_pct>=0}/><b>{x.price.toFixed(2)}</b><em>{x.change_pct>=0?'+':''}{x.change_pct.toFixed(2)}%</em></button>)}</div>
       <small>Veriler ücretsiz kaynaklardan gelir; gerçek zamanlı olduğu garanti edilmez.</small>
     </aside>
     {mobileMenuOpen?<button className="mobileBackdrop" onClick={()=>setMobileMenuOpen(false)} aria-label="Menüyü kapat"/>:null}
@@ -347,7 +347,15 @@ export default function Home(){
               </div>
               <div className={`newsThumb ${n.kind==='KAP'?'kapThumb':''}`}>
                 {n.image_url?
-                  <img src={n.image_url} alt={n.title} loading="lazy" referrerPolicy="no-referrer" onError={(e:any)=>{e.currentTarget.style.display='none';e.currentTarget.parentElement?.classList.add('imageFailed')}}/>
+                  <img
+                    src={`${API}/api/news/image?url=${encodeURIComponent(n.image_url)}`}
+                    alt={n.title}
+                    loading="lazy"
+                    onError={(e:any)=>{
+                      e.currentTarget.style.display='none';
+                      e.currentTarget.parentElement?.classList.add('imageFailed');
+                    }}
+                  />
                   :null}
                 <div className="thumbFallback">
                   <div className="thumbBars"><i/><i/><i/><i/></div>
@@ -465,6 +473,19 @@ export default function Home(){
       </>}
     </section>
   </main>
+}
+
+function Sparkline({values,positive}:{values:number[];positive:boolean}){
+  if(!values?.length)return <div className="sparkEmpty">—</div>;
+  const min=Math.min(...values), max=Math.max(...values), span=(max-min)||1;
+  const pts=values.map((v,i)=>{
+    const x=(i/Math.max(values.length-1,1))*64;
+    const y=20-((v-min)/span)*18;
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  }).join(' ');
+  return <svg className="miniSpark" viewBox="0 0 64 22" preserveAspectRatio="none" aria-hidden="true">
+    <polyline points={pts} fill="none" stroke="currentColor" strokeWidth="1.8" vectorEffect="non-scaling-stroke"/>
+  </svg>
 }
 
 function fmt(v:any){return v==null?'—':Number(v).toFixed(2)}
