@@ -3316,3 +3316,365 @@ def backtest_v7_exit_grid(
             'Backtest geçmiş performanstır; geleceği garanti etmez.',
         ],
     }
+
+
+@app.get('/api/backtest/v8-adaptive-risk')
+def backtest_v8_adaptive_risk(
+    test_days: int = Query(default=504, ge=252, le=756),
+    cost_bps: int = Query(default=20, ge=0, le=100),
+    cooldown_days: int = Query(default=5, ge=1, le=20),
+    max_hold_days: int = Query(default=10, ge=3, le=20),
+):
+    """
+    V8: Güçlü teknik teyit girişlerinde piyasa rejimine göre adaptif stop/hedef testi.
+
+    Rejim:
+    STRONG:
+      proxy EMA20 > EMA50
+      EMA20 slope5 > 0
+      breadth >= 65%
+
+    POSITIVE:
+      proxy EMA20 > EMA50
+      EMA20 slope5 > 0
+      breadth >= 55%
+
+    WEAK:
+      diğer durumlar
+
+    Politikalar:
+    fixed_6_2r:
+      tüm uygun girişlerde %6 stop cap, 2R hedef
+
+    adaptive_balanced:
+      STRONG -> %6 stop cap, 2R
+      POSITIVE -> %5 stop cap, 1.5R
+      WEAK -> işlem yok
+
+    adaptive_conservative:
+      STRONG -> %5 stop cap, 1.5R
+      POSITIVE -> %4 stop cap, 1.5R
+      WEAK -> işlem yok
+
+    adaptive_selective:
+      STRONG -> %6 stop cap, 2R
+      POSITIVE -> işlem yok
+      WEAK -> işlem yok
+    """
+    from .analysis_v5 import prepare_v5
+
+    tickers = [s + '.IS' for s in BIST30]
+    cost_pct = cost_bps / 100.0
+
+    try:
+        raw = yf.download(
+            tickers=tickers,
+            period='5y',
+            interval='1d',
+            auto_adjust=False,
+            progress=False,
+            threads=True,
+            group_by='ticker',
+        )
+    except Exception as exc:
+        raise HTTPException(503, f'V8 backtest verisi alınamadı: {exc}')
+
+    prepared = {}
+    close_map = {}
+
+    for symbol in BIST30:
+        ticker = symbol + '.IS'
+        try:
+            if isinstance(raw.columns, pd.MultiIndex):
+                if ticker not in raw.columns.get_level_values(0):
+                    continue
+                d = raw[ticker].copy()
+            else:
+                d = raw.copy()
+
+            d = d.dropna(subset=['Open','High','Low','Close'])
+            if len(d) < 300:
+                continue
+
+            a = prepare_v5(d)
+            prepared[symbol] = a
+            close_map[symbol] = a['Close']
+        except Exception:
+            continue
+
+    if not prepared:
+        raise HTTPException(503, 'V8 için veri hazırlanamadı')
+
+    # Market proxy + breadth
+    close_df = pd.DataFrame(close_map).sort_index()
+    returns = close_df.pct_change(fill_method=None)
+    proxy = (1 + returns.mean(axis=1, skipna=True).fillna(0)).cumprod() * 100
+    proxy_ema20 = proxy.ewm(span=20, adjust=False).mean()
+    proxy_ema50 = proxy.ewm(span=50, adjust=False).mean()
+    proxy_slope5 = (proxy_ema20 / proxy_ema20.shift(5) - 1) * 100
+
+    above_ema50 = {
+        symbol: a['Close'] > a['EMA50']
+        for symbol, a in prepared.items()
+    }
+    breadth_df = pd.DataFrame(above_ema50).reindex(close_df.index)
+    breadth = breadth_df.mean(axis=1, skipna=True) * 100
+
+    strong_market = (
+        (proxy_ema20 > proxy_ema50)
+        & (proxy_slope5 > 0)
+        & (breadth >= 65)
+    )
+    positive_market = (
+        (proxy_ema20 > proxy_ema50)
+        & (proxy_slope5 > 0)
+        & (breadth >= 55)
+    )
+
+    def regime_on(date):
+        if bool(strong_market.reindex([date]).fillna(False).iloc[0]):
+            return 'STRONG'
+        if bool(positive_market.reindex([date]).fillna(False).iloc[0]):
+            return 'POSITIVE'
+        return 'WEAK'
+
+    all_dates = close_df.index
+    start_date = all_dates[-test_days] if len(all_dates) >= test_days else all_dates[0]
+    test_dates = all_dates[all_dates >= start_date]
+    split_date = test_dates[len(test_dates)//2]
+
+    # Same entry signal: strong technical confirmation base.
+    events = []
+    for symbol, a in prepared.items():
+        start_pos = max(220, len(a) - test_days)
+        end_pos = len(a) - max_hold_days - 1
+
+        # entry generation still requires at least POSITIVE market as in V7
+        cond = (
+            a['STRONG_CONFIRMATION_BASE']
+            & positive_market.reindex(a.index).fillna(False)
+        )
+
+        last_event_pos = -10000
+        prev = False
+
+        for pos in range(start_pos, end_pos + 1):
+            is_on = bool(cond.iloc[pos])
+            new_event = is_on and (not prev) and (pos - last_event_pos >= cooldown_days)
+            prev = is_on
+            if not new_event:
+                continue
+
+            date = pd.Timestamp(a.index[pos])
+            events.append({
+                'symbol': symbol,
+                'a': a,
+                'pos': pos,
+                'date': date,
+                'regime': regime_on(date),
+            })
+            last_event_pos = pos
+
+    policies = {
+        'fixed_6_2r': {
+            'STRONG': (6.0, 2.0),
+            'POSITIVE': (6.0, 2.0),
+            'WEAK': None,
+        },
+        'adaptive_balanced': {
+            'STRONG': (6.0, 2.0),
+            'POSITIVE': (5.0, 1.5),
+            'WEAK': None,
+        },
+        'adaptive_conservative': {
+            'STRONG': (5.0, 1.5),
+            'POSITIVE': (4.0, 1.5),
+            'WEAK': None,
+        },
+        'adaptive_selective': {
+            'STRONG': (6.0, 2.0),
+            'POSITIVE': None,
+            'WEAK': None,
+        },
+    }
+
+    def calc_base_risk(a, pos, entry, stop_cap):
+        atr = float(a['ATR'].iloc[pos]) if pd.notna(a['ATR'].iloc[pos]) else None
+        prior_low = float(a['PRIOR_LOW20_V4'].iloc[pos]) if pd.notna(a['PRIOR_LOW20_V4'].iloc[pos]) else None
+
+        if atr is None or atr <= 0:
+            risk_pct = 3.0
+        elif prior_low is None or prior_low >= entry:
+            risk_pct = (1.75 * atr / entry) * 100.0
+        else:
+            raw_stop = prior_low - 0.25 * atr
+            risk_pct = ((entry - raw_stop) / entry) * 100.0
+
+        risk_pct = min(max(float(risk_pct), 1.0), float(stop_cap))
+        return risk_pct
+
+    def simulate(event, stop_cap, reward_r):
+        a = event['a']
+        pos = event['pos']
+        entry = float(a['Close'].iloc[pos])
+
+        risk_pct = calc_base_risk(a, pos, entry, stop_cap)
+        stop = entry * (1.0 - risk_pct / 100.0)
+        one_r = entry - stop
+        target = entry + reward_r * one_r
+
+        exit_price = None
+        exit_reason = None
+        exit_pos = None
+        last_pos = min(len(a)-1, pos + max_hold_days)
+
+        for j in range(pos+1, last_pos+1):
+            low = float(a['Low'].iloc[j])
+            high = float(a['High'].iloc[j])
+
+            stop_hit = low <= stop
+            target_hit = high >= target
+
+            if stop_hit and target_hit:
+                exit_price = stop
+                exit_reason = 'STOP'
+                exit_pos = j
+                break
+            if stop_hit:
+                exit_price = stop
+                exit_reason = 'STOP'
+                exit_pos = j
+                break
+            if target_hit:
+                exit_price = target
+                exit_reason = 'TARGET'
+                exit_pos = j
+                break
+
+        if exit_price is None:
+            exit_pos = last_pos
+            exit_price = float(a['Close'].iloc[exit_pos])
+            exit_reason = 'TIME'
+
+        gross = ((exit_price / entry) - 1.0) * 100.0
+        net = gross - cost_pct
+        r_multiple = net / risk_pct if risk_pct else None
+
+        return {
+            'symbol': event['symbol'],
+            'date': event['date'],
+            'regime': event['regime'],
+            'exit_date': pd.Timestamp(a.index[exit_pos]),
+            'exit_reason': exit_reason,
+            'net_return_pct': net,
+            'risk_pct': risk_pct,
+            'reward_r': reward_r,
+            'r_multiple': r_multiple,
+        }
+
+    results = {}
+
+    for policy_name, policy in policies.items():
+        rows = []
+        skipped = 0
+
+        for ev in events:
+            params = policy.get(ev['regime'])
+            if params is None:
+                skipped += 1
+                continue
+            stop_cap, reward_r = params
+            rows.append(simulate(ev, stop_cap, reward_r))
+
+        df = pd.DataFrame(rows)
+
+        def summarize_segment(seg):
+            if seg.empty:
+                return None
+            wins = int((seg['net_return_pct'] > 0).sum())
+            losses = int((seg['net_return_pct'] <= 0).sum())
+            reasons = seg['exit_reason'].value_counts().to_dict()
+            regime_counts = seg['regime'].value_counts().to_dict()
+            return {
+                'events': int(len(seg)),
+                'wins': wins,
+                'losses': losses,
+                'success_rate_pct': round(float(wins / len(seg) * 100), 2),
+                'avg_net_return_pct': round(float(seg['net_return_pct'].mean()), 3),
+                'median_net_return_pct': round(float(seg['net_return_pct'].median()), 3),
+                'avg_r_multiple': round(float(seg['r_multiple'].dropna().mean()), 3) if seg['r_multiple'].notna().any() else None,
+                'median_r_multiple': round(float(seg['r_multiple'].dropna().median()), 3) if seg['r_multiple'].notna().any() else None,
+                'avg_risk_pct': round(float(seg['risk_pct'].mean()), 3),
+                'exit_reasons': {str(k): int(v) for k, v in reasons.items()},
+                'regime_counts': {str(k): int(v) for k, v in regime_counts.items()},
+            }
+
+        if df.empty:
+            results[policy_name] = {
+                'skipped_events': skipped,
+                'development': None,
+                'validation': None,
+            }
+            continue
+
+        dev = df[df['date'] < split_date].copy()
+        val = df[df['date'] >= split_date].copy()
+
+        results[policy_name] = {
+            'skipped_events': skipped,
+            'development': summarize_segment(dev),
+            'validation': summarize_segment(val),
+        }
+
+    # Regime diagnostics independent of policy
+    regime_diag = {}
+    events_df = pd.DataFrame([{
+        'date': e['date'],
+        'regime': e['regime'],
+    } for e in events])
+    if not events_df.empty:
+        for seg_name, mask in [
+            ('development', events_df['date'] < split_date),
+            ('validation', events_df['date'] >= split_date),
+        ]:
+            seg = events_df[mask]
+            regime_diag[seg_name] = {
+                str(k): int(v)
+                for k, v in seg['regime'].value_counts().to_dict().items()
+            }
+
+    return {
+        'ok': True,
+        'model': 'v8_adaptive_risk',
+        'tested_symbols': len(prepared),
+        'entry_event_count': len(events),
+        'split_date': pd.Timestamp(split_date).date().isoformat(),
+        'settings': {
+            'test_days': test_days,
+            'cost_bps': cost_bps,
+            'cooldown_days': cooldown_days,
+            'max_hold_days': max_hold_days,
+            'entry_signal': 'GUCLU_TEKNIK_TEYIT + en az POSITIVE piyasa',
+            'strong_regime': 'EMA20>EMA50, slope5>0, breadth>=65%',
+            'positive_regime': 'EMA20>EMA50, slope5>0, breadth>=55%',
+            'weak_regime': 'diğer',
+        },
+        'policies': {
+            'fixed_6_2r': 'STRONG/POSITIVE -> %6 stop cap + 2R',
+            'adaptive_balanced': 'STRONG -> %6 + 2R, POSITIVE -> %5 + 1.5R',
+            'adaptive_conservative': 'STRONG -> %5 + 1.5R, POSITIVE -> %4 + 1.5R',
+            'adaptive_selective': 'yalnız STRONG -> %6 + 2R',
+        },
+        'regime_diagnostics': regime_diag,
+        'results': results,
+        'interpretation': (
+            'Validation ile development birlikte incelenmeli. '
+            'Amaç sadece validation ortalamasını yükseltmek değil, iki dönemde de daha tutarlı sonuç elde etmektir.'
+        ),
+        'caveats': [
+            'Günlük OHLC stop/hedef sırasını göstermez; aynı gün ikisi görülürse STOP önce kabul edilir.',
+            'Current BIST30 composition geçmişe uygulanır; survivorship bias olabilir.',
+            'Yahoo Finance resmi gerçek zamanlı BIST verisi değildir.',
+            'Backtest geçmiş performanstır; geleceği garanti etmez.',
+        ],
+    }
