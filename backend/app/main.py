@@ -3000,3 +3000,319 @@ def backtest_v6_risk(
             'Backtest geçmiş performanstır; geleceği garanti etmez.',
         ],
     }
+
+
+@app.get('/api/backtest/v7-exit-grid')
+def backtest_v7_exit_grid(
+    test_days: int = Query(default=504, ge=252, le=756),
+    cost_bps: int = Query(default=20, ge=0, le=100),
+    cooldown_days: int = Query(default=5, ge=1, le=20),
+    max_hold_days: int = Query(default=10, ge=3, le=20),
+):
+    """
+    V7: GÜÇLÜ TEKNİK TEYİT + piyasa filtresi girişleri üzerinde
+    stop üst sınırı / hedef R / 1R sonrası breakeven kombinasyonlarını test eder.
+
+    Grid:
+    stop_cap_pct = 3,4,5,6,7
+    reward_r = 1.0, 1.5, 2.0
+    breakeven_after_1r = False / True
+
+    Toplam 30 kombinasyon.
+    """
+    from .analysis_v5 import prepare_v5
+
+    tickers = [s + '.IS' for s in BIST30]
+    cost_pct = cost_bps / 100.0
+
+    try:
+        raw = yf.download(
+            tickers=tickers,
+            period='5y',
+            interval='1d',
+            auto_adjust=False,
+            progress=False,
+            threads=True,
+            group_by='ticker',
+        )
+    except Exception as exc:
+        raise HTTPException(503, f'V7 backtest verisi alınamadı: {exc}')
+
+    prepared = {}
+    close_map = {}
+
+    for symbol in BIST30:
+        ticker = symbol + '.IS'
+        try:
+            if isinstance(raw.columns, pd.MultiIndex):
+                if ticker not in raw.columns.get_level_values(0):
+                    continue
+                d = raw[ticker].copy()
+            else:
+                d = raw.copy()
+
+            d = d.dropna(subset=['Open','High','Low','Close'])
+            if len(d) < 300:
+                continue
+
+            a = prepare_v5(d)
+            prepared[symbol] = a
+            close_map[symbol] = a['Close']
+        except Exception:
+            continue
+
+    if not prepared:
+        raise HTTPException(503, 'V7 için veri hazırlanamadı')
+
+    # V4/V5 ile aynı genel piyasa rejimi.
+    close_df = pd.DataFrame(close_map).sort_index()
+    returns = close_df.pct_change(fill_method=None)
+    proxy = (1 + returns.mean(axis=1, skipna=True).fillna(0)).cumprod() * 100
+    proxy_ema20 = proxy.ewm(span=20, adjust=False).mean()
+    proxy_ema50 = proxy.ewm(span=50, adjust=False).mean()
+    proxy_slope5 = (proxy_ema20 / proxy_ema20.shift(5) - 1) * 100
+
+    above_ema50 = {
+        symbol: a['Close'] > a['EMA50']
+        for symbol, a in prepared.items()
+    }
+    breadth_df = pd.DataFrame(above_ema50).reindex(close_df.index)
+    breadth = breadth_df.mean(axis=1, skipna=True) * 100
+    market_positive = (
+        (proxy_ema20 > proxy_ema50)
+        & (proxy_slope5 > 0)
+        & (breadth >= 55)
+    )
+
+    all_dates = close_df.index
+    start_date = all_dates[-test_days] if len(all_dates) >= test_days else all_dates[0]
+    test_dates = all_dates[all_dates >= start_date]
+    split_date = test_dates[len(test_dates)//2]
+
+    # First collect the same strong-confirmation entry events once.
+    events = []
+
+    for symbol, a in prepared.items():
+        start_pos = max(220, len(a) - test_days)
+        end_pos = len(a) - max_hold_days - 1
+
+        cond = (
+            a['STRONG_CONFIRMATION_BASE']
+            & market_positive.reindex(a.index).fillna(False)
+        )
+
+        last_event_pos = -10000
+        prev = False
+
+        for pos in range(start_pos, end_pos + 1):
+            is_on = bool(cond.iloc[pos])
+            new_event = is_on and (not prev) and (pos - last_event_pos >= cooldown_days)
+            prev = is_on
+            if not new_event:
+                continue
+
+            events.append({
+                'symbol': symbol,
+                'a': a,
+                'pos': pos,
+                'date': pd.Timestamp(a.index[pos]),
+            })
+            last_event_pos = pos
+
+    def base_risk(a, pos, entry, stop_cap):
+        atr = float(a['ATR'].iloc[pos]) if pd.notna(a['ATR'].iloc[pos]) else None
+        prior_low = float(a['PRIOR_LOW20_V4'].iloc[pos]) if pd.notna(a['PRIOR_LOW20_V4'].iloc[pos]) else None
+
+        if atr is None or atr <= 0:
+            risk_pct = 3.0
+        elif prior_low is None or prior_low >= entry:
+            risk_pct = (1.75 * atr / entry) * 100.0
+        else:
+            raw_stop = prior_low - 0.25 * atr
+            risk_pct = ((entry - raw_stop) / entry) * 100.0
+
+        risk_pct = min(max(float(risk_pct), 1.0), float(stop_cap))
+        return risk_pct
+
+    def simulate(event, stop_cap, reward_r, breakeven):
+        a = event['a']
+        pos = event['pos']
+        entry = float(a['Close'].iloc[pos])
+
+        risk_pct = base_risk(a, pos, entry, stop_cap)
+        stop = entry * (1.0 - risk_pct / 100.0)
+        one_r = entry - stop
+        target1 = entry + one_r
+        target = entry + reward_r * one_r
+
+        current_stop = stop
+        hit_1r = False
+        exit_price = None
+        exit_reason = None
+        exit_pos = None
+
+        last_pos = min(len(a)-1, pos + max_hold_days)
+
+        for j in range(pos + 1, last_pos + 1):
+            low = float(a['Low'].iloc[j])
+            high = float(a['High'].iloc[j])
+
+            # If both stop and target are visible in one daily candle,
+            # use conservative ordering: stop first.
+            stop_hit = low <= current_stop
+            target_hit = high >= target
+
+            if stop_hit and target_hit:
+                exit_price = current_stop
+                exit_reason = 'STOP' if not hit_1r else 'BREAKEVEN_STOP'
+                exit_pos = j
+                break
+
+            if stop_hit:
+                exit_price = current_stop
+                exit_reason = 'STOP' if not hit_1r else 'BREAKEVEN_STOP'
+                exit_pos = j
+                break
+
+            if target_hit:
+                exit_price = target
+                exit_reason = 'TARGET'
+                exit_pos = j
+                break
+
+            # Move stop to entry only after candle survives without stop/target.
+            if (not hit_1r) and high >= target1:
+                hit_1r = True
+                if breakeven:
+                    current_stop = entry
+
+        if exit_price is None:
+            exit_pos = last_pos
+            exit_price = float(a['Close'].iloc[exit_pos])
+            exit_reason = 'TIME'
+
+        gross = ((exit_price / entry) - 1.0) * 100.0
+        net = gross - cost_pct
+        r_mult = net / risk_pct if risk_pct else None
+
+        return {
+            'symbol': event['symbol'],
+            'date': event['date'],
+            'exit_date': pd.Timestamp(a.index[exit_pos]),
+            'net_return_pct': net,
+            'risk_pct': risk_pct,
+            'r_multiple': r_mult,
+            'exit_reason': exit_reason,
+            'hit_1r': hit_1r,
+        }
+
+    stop_caps = [3, 4, 5, 6, 7]
+    rewards = [1.0, 1.5, 2.0]
+    be_options = [False, True]
+
+    combos = []
+
+    for stop_cap in stop_caps:
+        for reward_r in rewards:
+            for breakeven in be_options:
+                rows = [simulate(ev, stop_cap, reward_r, breakeven) for ev in events]
+                df = pd.DataFrame(rows)
+                if df.empty:
+                    continue
+
+                combo_result = {
+                    'stop_cap_pct': stop_cap,
+                    'reward_r': reward_r,
+                    'breakeven_after_1r': breakeven,
+                    'development': None,
+                    'validation': None,
+                }
+
+                for seg_name, mask in [
+                    ('development', df['date'] < split_date),
+                    ('validation', df['date'] >= split_date),
+                ]:
+                    seg = df[mask].copy()
+                    if seg.empty:
+                        continue
+
+                    wins = int((seg['net_return_pct'] > 0).sum())
+                    losses = int((seg['net_return_pct'] <= 0).sum())
+                    reasons = seg['exit_reason'].value_counts().to_dict()
+
+                    combo_result[seg_name] = {
+                        'events': int(len(seg)),
+                        'wins': wins,
+                        'losses': losses,
+                        'success_rate_pct': round(float(wins / len(seg) * 100), 2),
+                        'avg_net_return_pct': round(float(seg['net_return_pct'].mean()), 3),
+                        'median_net_return_pct': round(float(seg['net_return_pct'].median()), 3),
+                        'avg_r_multiple': round(float(seg['r_multiple'].dropna().mean()), 3) if seg['r_multiple'].notna().any() else None,
+                        'median_r_multiple': round(float(seg['r_multiple'].dropna().median()), 3) if seg['r_multiple'].notna().any() else None,
+                        'hit_1r_rate_pct': round(float(seg['hit_1r'].mean() * 100), 2),
+                        'avg_risk_pct': round(float(seg['risk_pct'].mean()), 3),
+                        'exit_reasons': {str(k): int(v) for k, v in reasons.items()},
+                    }
+
+                combos.append(combo_result)
+
+    # Do not declare a "winner"; return neutral sortable candidate views.
+    validation_positive = [
+        c for c in combos
+        if c.get('validation')
+        and c['validation']['avg_net_return_pct'] > 0
+        and c['validation']['median_net_return_pct'] > 0
+    ]
+
+    by_avg_return = sorted(
+        validation_positive,
+        key=lambda c: c['validation']['avg_net_return_pct'],
+        reverse=True
+    )[:10]
+
+    by_avg_r = sorted(
+        validation_positive,
+        key=lambda c: c['validation']['avg_r_multiple'],
+        reverse=True
+    )[:10]
+
+    by_success = sorted(
+        validation_positive,
+        key=lambda c: c['validation']['success_rate_pct'],
+        reverse=True
+    )[:10]
+
+    return {
+        'ok': True,
+        'model': 'v7_exit_grid',
+        'tested_symbols': len(prepared),
+        'entry_event_count': len(events),
+        'split_date': pd.Timestamp(split_date).date().isoformat(),
+        'settings': {
+            'test_days': test_days,
+            'cost_bps': cost_bps,
+            'cooldown_days': cooldown_days,
+            'max_hold_days': max_hold_days,
+            'entry_signal': 'GUCLU_TEKNIK_TEYIT + piyasa filtresi',
+            'stop_caps_tested_pct': stop_caps,
+            'reward_r_tested': rewards,
+            'breakeven_options': be_options,
+            'same_day_rule': 'stop ve hedef aynı gün görülürse stop önce',
+        },
+        'all_combinations': combos,
+        'validation_candidate_views': {
+            'top_by_avg_net_return': by_avg_return,
+            'top_by_avg_r_multiple': by_avg_r,
+            'top_by_success_rate': by_success,
+        },
+        'interpretation': (
+            'Validation sonuçlarını development ile birlikte incele. '
+            'Tek bir metrik yerine ortalama/medyan getiri, R multiple, başarı oranı ve exit_reasons birlikte değerlendirilmelidir.'
+        ),
+        'caveats': [
+            'Günlük OHLC gün içi stop/hedef sırasını göstermez; muhafazakâr stop-first kuralı kullanılır.',
+            'Current BIST30 composition geçmişe uygulanır; survivorship bias olabilir.',
+            'Yahoo Finance resmi gerçek zamanlı BIST verisi değildir.',
+            'Backtest geçmiş performanstır; geleceği garanti etmez.',
+        ],
+    }
