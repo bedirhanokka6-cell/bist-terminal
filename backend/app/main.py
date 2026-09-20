@@ -183,16 +183,25 @@ def health():
 
 @app.get('/api/bist30')
 def bist30():
-    # 30 hisseyi tek tek indirmek yerine tek toplu istekte al.
-    # Bu, özellikle Render üzerinde sol BIST30 listesinin çok daha hızlı dolmasını sağlar.
+    """
+    Sol BIST30 listesi.
+    Günlük değişim için 5 günlük / 1 günlük toplu veri kullanır.
+    Intraday toplu Yahoo isteği boş döndüğünde listenin tamamen kaybolmasını önler.
+    """
+    cached = _v10_cache_get('bist30_watchlist')
+    if cached is not None:
+        return cached
+
     tickers = [s + '.IS' for s in BIST30]
     rows = []
 
+    # Birincil yöntem: tek toplu günlük istek.
+    # Hem daha hafif hem de sol listedeki "Değişim" günlük değişimi doğru ifade eder.
     try:
         data = yf.download(
             tickers=tickers,
-            period='5d',
-            interval='15m',
+            period='7d',
+            interval='1d',
             auto_adjust=False,
             progress=False,
             threads=True,
@@ -207,7 +216,6 @@ def bist30():
                         continue
                     d = data[ticker].dropna(how='all')
                 else:
-                    # Tek sembol benzeri dönüş ihtimaline karşı.
                     d = data.dropna(how='all')
 
                 if 'Close' not in d.columns:
@@ -217,37 +225,66 @@ def bist30():
                 if len(closes) < 2:
                     continue
 
-                p = float(closes.iloc[-1])
-                prev = float(closes.iloc[-2])
+                price = float(closes.iloc[-1])
+                prev_close = float(closes.iloc[-2])
                 rows.append({
                     'symbol': s,
-                    'price': p,
-                    'change_pct': ((p / prev) - 1) * 100 if prev else 0,
+                    'price': round(price, 2),
+                    'change_pct': ((price / prev_close) - 1) * 100 if prev_close else 0,
                 })
             except Exception:
                 continue
-
     except Exception:
-        # Toplu istek başarısız olursa eski yöntem yedek olarak çalışsın.
-        for s in BIST30:
-            try:
-                d = load_chart(s, '5G')
-                if len(d) < 2:
-                    continue
-                p = float(d['Close'].iloc[-1])
-                prev = float(d['Close'].iloc[-2])
-                rows.append({
-                    'symbol': s,
-                    'price': p,
-                    'change_pct': ((p / prev) - 1) * 100 if prev else 0,
-                })
-            except Exception:
+        rows = []
+
+    # Toplu cevap eksik/boşsa sadece eksik sembolleri daha güvenilir tekil yöntemle tamamla.
+    existing = {r['symbol'] for r in rows}
+    missing = [s for s in BIST30 if s not in existing]
+
+    # 30 hissenin çoğu toplu istekte yoksa toplu sonucu güvenilmez say.
+    if len(rows) < 20:
+        rows = []
+        existing = set()
+        missing = list(BIST30)
+
+    for s in missing:
+        try:
+            d = yf.download(
+                s + '.IS',
+                period='7d',
+                interval='1d',
+                auto_adjust=False,
+                progress=False,
+                threads=False,
+            )
+            if isinstance(d.columns, pd.MultiIndex):
+                d.columns = d.columns.get_level_values(0)
+            d = d.dropna(how='all')
+            closes = pd.to_numeric(d['Close'], errors='coerce').dropna()
+            if len(closes) < 2:
                 continue
 
-    # Her zaman BIST30 sırasını koru.
+            price = float(closes.iloc[-1])
+            prev_close = float(closes.iloc[-2])
+            rows.append({
+                'symbol': s,
+                'price': round(price, 2),
+                'change_pct': ((price / prev_close) - 1) * 100 if prev_close else 0,
+            })
+        except Exception:
+            continue
+
     order = {s: i for i, s in enumerate(BIST30)}
-    rows.sort(key=lambda x: order.get(x['symbol'], 999))
-    return rows
+    # Duplicate ihtimalini temizle
+    by_symbol = {r['symbol']: r for r in rows}
+    rows = sorted(by_symbol.values(), key=lambda x: order.get(x['symbol'], 999))
+
+    # Başarılı cevap 60 saniye cache.
+    if rows:
+        return _v10_cache_set('bist30_watchlist', rows, 60)
+
+    return []
+
 
 @app.get('/api/stock/{symbol}')
 def stock(symbol: str, period: str = '1A'):

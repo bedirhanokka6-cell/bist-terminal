@@ -34,6 +34,7 @@ export default function Home(){
   const [v5,setV5]=useState<any>(null);
   const [openPositions,setOpenPositions]=useState<any[]>([]);
   const [v9Status,setV9Status]=useState<any>(null);
+  const [showExtraPanels,setShowExtraPanels]=useState(false);
   const [mobileMenuOpen,setMobileMenuOpen]=useState(false);
 
   const loadSignals=async()=>{
@@ -94,6 +95,15 @@ export default function Home(){
     }catch{}
   };
 
+  const loadExtraPanels=async()=>{
+    setShowExtraPanels(true);
+    await Promise.allSettled([
+      loadScanner(),
+      loadOpenPositions(),
+      loadV9Status(),
+    ]);
+  };
+
   const loadTradeHistory=async()=>{
     setTradeHistoryLoading(true);
     try{
@@ -108,15 +118,9 @@ export default function Home(){
 
   useEffect(()=>{
     loadWatch();
-    loadScanner();
     loadSignals();
-    loadOpenPositions();
-    loadV9Status();
     const watchTimer=setInterval(loadWatch,60000);
-    const scannerTimer=setInterval(loadScanner,120000);
-    const positionTimer=setInterval(loadOpenPositions,120000);
-    const v9Timer=setInterval(loadV9Status,120000);
-    return()=>{clearInterval(watchTimer);clearInterval(scannerTimer);clearInterval(positionTimer);clearInterval(v9Timer);};
+    return()=>{clearInterval(watchTimer);};
   },[]);
 
   useEffect(()=>{
@@ -317,6 +321,16 @@ export default function Home(){
 
       <section className="panel scanner"><div className="sectionTitle"><div><h2>BIST 30 Fırsat Tarayıcı</h2><p>Teknik skoru yüksek hisseleri hızlıca görün.</p></div></div><div className="table"><div className="tr head"><span>Hisse</span><span>Fiyat</span><span>Değişim</span><span>Skor</span><span>RSI</span><span>Hacim</span><span>Destek</span><span>Direnç</span><span>Durum</span></div>{scan.map(x=><div className="tr" key={x.symbol} onClick={()=>{setSymbol(x.symbol);setMobileMenuOpen(false)}}><span><b>{x.symbol}</b></span><span>{x.price.toFixed(2)} ₺</span><span className={x.change_pct>=0?'green':'red'}>{x.change_pct>=0?'+':''}{x.change_pct.toFixed(2)}%</span><span>{x.score.toFixed(1)}</span><span>{x.rsi?.toFixed?.(1) ?? '—'}</span><span>{x.vol_ratio?.toFixed?.(2) ?? '—'}x</span><span>{x.support.toFixed(2)}</span><span>{x.resistance.toFixed(2)}</span><span>{x.state}</span></div>)}</div></section>
 
+      <section className="panel lazyPanelToggle">
+        <div>
+          <b>Ek Paneller</b>
+          <span>Tarayıcı, açık sinyaller ve geçmiş veriler yalnızca istediğinde yüklenir.</span>
+        </div>
+        <button onClick={showExtraPanels?()=>setShowExtraPanels(false):loadExtraPanels}>
+          {showExtraPanels?"Panelleri Gizle":"Alt Panelleri Yükle"}
+        </button>
+      </section>
+      {showExtraPanels && (<>
       <section className="panel v9PaperBanner">
         <div><b>V9 PAPER FORWARD TEST</b><span> Gerçek para emri yok — canlı sinyaller ve sonuçlar kaydediliyor.</span></div>
         <div className="v9StatusRow">
@@ -355,6 +369,8 @@ export default function Home(){
           </div>):<div className="emptySignals">{tradeHistoryLoading?'Geçmiş işlemler hesaplanıyor...':'Geçmiş işlem bulunamadı.'}</div>}
         </div>
       </section>
+
+      </>)}
 
       <section className="panel signalHistory">
         <div className="signalHeader">
