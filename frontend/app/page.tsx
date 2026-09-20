@@ -39,10 +39,11 @@ export default function Home(){
 
   const loadSignals=async()=>{
     try{
-      const r=await fetch(`${API}/api/signals?limit=100`,{cache:'no-store'});
-      if(r.ok){const d=await r.json();setSignals(d.items||[])}
-      const s=await fetch(`${API}/api/signals/stats/summary?horizon_days=${horizon}`,{cache:'no-store'});
-      if(s.ok)setStats(await s.json());
+      const r=await fetch(`${API}/api/signals/recent?days=30&limit=300`,{cache:'no-store'});
+      if(r.ok){
+        const j=await r.json();
+        setSignalHistory(j?.items ?? []);
+      }
     }catch{}
   };
 
@@ -273,7 +274,7 @@ export default function Home(){
     {mobileMenuOpen?<button className="mobileBackdrop" onClick={()=>setMobileMenuOpen(false)} aria-label="Menüyü kapat"/>:null}
 
     <section className="mainArea">
-      <header className="topnav"><button className="mobileMenuBtn" onClick={()=>setMobileMenuOpen(true)}>☰ BIST 30</button><div className="brand">▮▮▮ <b>BIST TERMINAL</b></div><nav><span>Ana Sayfa</span><span className="active">Hisse Analizi</span><span>BIST 30 Tarayıcı</span><span>Haberler (KAP)</span><span>Takip Listesi</span><span>Sinyal Geçmişi</span></nav><div style={{display:'flex',gap:'8px',alignItems:'center'}}>
+      <header className="topnav"><button className="mobileMenuBtn" onClick={()=>setMobileMenuOpen(true)}>☰ BIST 30</button><div className="brand">▮▮▮ <b>BIST TERMINAL</b></div><nav><span>Ana Sayfa</span><span className="active">Hisse Analizi</span><span>BIST 30 Tarayıcı</span><span>Haberler (KAP)</span><span>Takip Listesi</span><span>Son 1 Aylık Sinyaller</span></nav><div style={{display:'flex',gap:'8px',alignItems:'center'}}>
           <button onClick={enableNotifications} style={{padding:'7px 10px',borderRadius:'7px',border:'1px solid #24445f',background:'#123451',color:'#fff',cursor:'pointer'}}>
             🔔 Bildirimleri Aç
           </button>
@@ -359,7 +360,7 @@ export default function Home(){
 
       <section className="panel tradeHistory">
         <div className="signalHeader">
-          <div><h2>Geçmiş V4 İşlemleri</h2><p>V4'ün geçmişte verdiği AL adayları ve stop/hedef/zaman çıkışları.</p></div>
+          <div><h2>Son 1 Aylık Geçmiş Sinyaller</h2><p>V4'ün geçmişte verdiği AL adayları ve stop/hedef/zaman çıkışları.</p></div>
           <div className="signalActions"><button onClick={loadTradeHistory}>{tradeHistoryLoading?"Yükleniyor...":"Geçmişi Yükle"}</button></div>
         </div>
         <div className="tradeTableWrap">
@@ -374,7 +375,7 @@ export default function Home(){
 
       <section className="panel signalHistory">
         <div className="signalHeader">
-          <div><h2>Sinyal Geçmişi</h2><p>PostgreSQL'e kaydedilen teknik sinyaller ve geçmiş performans takibi.</p></div>
+          <div><h2>Son 1 Aylık Sinyaller</h2><p className="monthSignalNote">Yalnızca son 30 gündeki kayıtlı sinyaller gösterilir.</p><p>PostgreSQL'e kaydedilen teknik sinyaller ve geçmiş performans takibi.</p></div>
           <div className="signalActions">
             <label>Sonuç süresi<select value={horizon} onChange={e=>setHorizon(Number(e.target.value))}>{horizons.map(h=><option key={h} value={h}>{h} işlem günü</option>)}</select></label>
             <button onClick={evaluatePending} disabled={signalBusy}>Bekleyenleri değerlendir</button>

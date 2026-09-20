@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 import yfinance as yf
 import os
-from datetime import datetime, time
+from datetime import datetime, time, timedelta
 from zoneinfo import ZoneInfo
 from sqlalchemy.orm import Session
 from sqlalchemy import func
@@ -4195,5 +4195,44 @@ def backtest_v9_forward(
             'Yahoo Finance is not official real-time BIST data.',
             'Daily OHLC cannot reveal intraday stop/target order; STOP-first is used conservatively.',
         ],
+    }
+
+
+
+@app.get('/api/signals/recent')
+def recent_signals(
+    days: int = Query(default=30, ge=1, le=90),
+    limit: int = Query(default=300, ge=1, le=1000),
+    db: Session = Depends(get_db),
+):
+    """
+    Son N gündeki kayıtlı teknik sinyalleri döndürür.
+    Varsayılan: son 30 gün.
+    """
+    since = datetime.utcnow() - timedelta(days=days)
+
+    rows = (
+        db.query(Signal)
+        .filter(Signal.created_at >= since)
+        .order_by(Signal.created_at.desc())
+        .limit(limit)
+        .all()
+    )
+
+    items = []
+    for x in rows:
+        items.append({
+            'id': x.id,
+            'symbol': getattr(x, 'symbol', None),
+            'signal': getattr(x, 'signal', None),
+            'score': getattr(x, 'score', None),
+            'price': getattr(x, 'price', None),
+            'created_at': x.created_at.isoformat() if getattr(x, 'created_at', None) else None,
+        })
+
+    return {
+        'days': days,
+        'count': len(items),
+        'items': items,
     }
 
