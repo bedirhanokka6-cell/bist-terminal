@@ -29,6 +29,8 @@ export default function Home(){
   const [signalMessage,setSignalMessage]=useState('');
   const [pushStatus,setPushStatus]=useState('Bildirim kapalı');
   const [pushToken,setPushToken]=useState('');
+  const [tradeHistory,setTradeHistory]=useState<any[]>([]);
+  const [tradeHistoryLoading,setTradeHistoryLoading]=useState(false);
   const [mobileMenuOpen,setMobileMenuOpen]=useState(false);
 
   const loadSignals=async()=>{
@@ -65,10 +67,23 @@ export default function Home(){
     }
   };
 
+  const loadTradeHistory=async()=>{
+    setTradeHistoryLoading(true);
+    try{
+      const r=await fetch(`${API}/api/backtest/v4-trades?limit=40`,{cache:'no-store'});
+      if(r.ok){
+        const j=await r.json();
+        setTradeHistory(j?.trades ?? []);
+      }
+    }catch{}
+    finally{setTradeHistoryLoading(false);}
+  };
+
   useEffect(()=>{
     loadWatch();
     loadScanner();
     loadSignals();
+    loadTradeHistory();
     const watchTimer=setInterval(loadWatch,60000);
     const scannerTimer=setInterval(loadScanner,60000);
     return()=>{clearInterval(watchTimer);clearInterval(scannerTimer);};
@@ -256,6 +271,19 @@ export default function Home(){
       <div className="metricGrid"><Metric k="Teknik Skor" v={`${score.toFixed?.(1) ?? score}/10`}/><Metric k="Hacim Skoru" v={stock?.volume_analysis?.score==null?'—':`${Number(stock.volume_analysis.score).toFixed(1)}/10`}/><Metric k="RVOL" v={last?.rvol==null?'—':`${Number(last.rvol).toFixed(2)}x`}/><Metric k="MFI" v={fmt(last?.mfi)}/><Metric k="CMF" v={last?.cmf==null?'—':Number(last.cmf).toFixed(3)}/><Metric k="RSI" v={fmt(last?.rsi)}/><Metric k="ATR" v={fmt(last?.atr)}/><Metric k="Piyasa" v={stock?.market_regime?.state ?? '—'}/></div>
 
       <section className="panel scanner"><div className="sectionTitle"><div><h2>BIST 30 Fırsat Tarayıcı</h2><p>Teknik skoru yüksek hisseleri hızlıca görün.</p></div></div><div className="table"><div className="tr head"><span>Hisse</span><span>Fiyat</span><span>Değişim</span><span>Skor</span><span>RSI</span><span>Hacim</span><span>Destek</span><span>Direnç</span><span>Durum</span></div>{scan.map(x=><div className="tr" key={x.symbol} onClick={()=>{setSymbol(x.symbol);setMobileMenuOpen(false)}}><span><b>{x.symbol}</b></span><span>{x.price.toFixed(2)} ₺</span><span className={x.change_pct>=0?'green':'red'}>{x.change_pct>=0?'+':''}{x.change_pct.toFixed(2)}%</span><span>{x.score.toFixed(1)}</span><span>{x.rsi?.toFixed?.(1) ?? '—'}</span><span>{x.vol_ratio?.toFixed?.(2) ?? '—'}x</span><span>{x.support.toFixed(2)}</span><span>{x.resistance.toFixed(2)}</span><span>{x.state}</span></div>)}</div></section>
+
+      <section className="panel tradeHistory">
+        <div className="signalHeader">
+          <div><h2>Geçmiş V4 İşlemleri</h2><p>V4'ün geçmişte verdiği AL adayları ve stop/hedef/zaman çıkışları.</p></div>
+          <div className="signalActions"><button onClick={loadTradeHistory} disabled={tradeHistoryLoading}>{tradeHistoryLoading?'Yükleniyor...':'Yenile'}</button></div>
+        </div>
+        <div className="tradeTableWrap">
+          <div className="tradeTr head"><span>Hisse</span><span>AL tarihi</span><span>Giriş</span><span>Çıkış tarihi</span><span>Çıkış</span><span>Neden</span><span>Getiri</span><span>Skor</span><span>Hacim</span></div>
+          {tradeHistory.length?tradeHistory.map((t:any,i:number)=><div className="tradeTr" key={`${t.symbol}-${t.entry_date}-${i}`} onClick={()=>setSymbol(t.symbol)}>
+            <b>{t.symbol}</b><span>{t.entry_date}</span><span>{fmt(t.entry_price)} ₺</span><span>{t.exit_date}</span><span>{fmt(t.exit_price)} ₺</span><span>{t.exit_reason==='TARGET'?'HEDEF':t.exit_reason==='STOP'?'STOP':'ZAMAN'}</span><b className={Number(t.net_return_pct)>=0?'green':'red'}>{Number(t.net_return_pct)>=0?'+':''}{Number(t.net_return_pct).toFixed(2)}%</b><span>{Number(t.quality_score).toFixed(2)}</span><span>{Number(t.volume_score).toFixed(2)}</span>
+          </div>):<div className="emptySignals">{tradeHistoryLoading?'Geçmiş işlemler hesaplanıyor...':'Geçmiş işlem bulunamadı.'}</div>}
+        </div>
+      </section>
 
       <section className="panel signalHistory">
         <div className="signalHeader">

@@ -1861,3 +1861,201 @@ def backtest_v4_volume(
             'Backtest geçmiş performanstır; geleceği garanti etmez.',
         ],
     }
+
+
+@app.get('/api/backtest/v4-trades')
+def backtest_v4_trades(
+    test_days: int = Query(default=504, ge=120, le=756),
+    min_quality: float = Query(default=8.25, ge=7.25, le=10.0),
+    min_volume: float = Query(default=6.0, ge=0.0, le=10.0),
+    cost_bps: int = Query(default=20, ge=0, le=100),
+    cooldown_days: int = Query(default=5, ge=1, le=20),
+    max_hold_days: int = Query(default=10, ge=3, le=20),
+    reward_r: float = Query(default=2.0, ge=1.0, le=4.0),
+    limit: int = Query(default=100, ge=10, le=500),
+):
+    """
+    V4 geçmiş işlem listesi.
+    Her satır gerçek backtest olayıdır:
+    - entry_date / entry_price
+    - exit_date / exit_price
+    - exit_reason: TARGET / STOP / TIME
+    - net_return_pct
+    - kalite/hacim skorları
+    """
+    from .analysis_v2 import indicators_v2, quality_score_series
+    from .analysis_v4 import volume_score_series
+
+    tickers = [s + '.IS' for s in BIST30]
+    cost_pct = cost_bps / 100.0
+
+    try:
+        raw = yf.download(
+            tickers=tickers,
+            period='5y',
+            interval='1d',
+            auto_adjust=False,
+            progress=False,
+            threads=True,
+            group_by='ticker',
+        )
+    except Exception as exc:
+        raise HTTPException(503, f'V4 trade listesi verisi alınamadı: {exc}')
+
+    prepared = {}
+    close_map = {}
+
+    for symbol in BIST30:
+        ticker = symbol + '.IS'
+        try:
+            if isinstance(raw.columns, pd.MultiIndex):
+                if ticker not in raw.columns.get_level_values(0):
+                    continue
+                d = raw[ticker].copy()
+            else:
+                d = raw.copy()
+
+            d = d.dropna(subset=['Open','High','Low','Close'])
+            if len(d) < 300:
+                continue
+
+            q = quality_score_series(indicators_v2(d))
+            v = volume_score_series(q)
+            prepared[symbol] = v
+            close_map[symbol] = v['Close']
+        except Exception:
+            continue
+
+    if not prepared:
+        raise HTTPException(503, 'V4 trade listesi için veri hazırlanamadı')
+
+    # Aynı V4 market proxy/breadth mantığı.
+    close_df = pd.DataFrame(close_map).sort_index()
+    returns = close_df.pct_change(fill_method=None)
+    proxy = (1 + returns.mean(axis=1, skipna=True).fillna(0)).cumprod() * 100
+    proxy_ema20 = proxy.ewm(span=20, adjust=False).mean()
+    proxy_ema50 = proxy.ewm(span=50, adjust=False).mean()
+    proxy_slope5 = (proxy_ema20 / proxy_ema20.shift(5) - 1) * 100
+
+    above_ema50 = {symbol: a['Close'] > a['EMA50'] for symbol, a in prepared.items()}
+    breadth_df = pd.DataFrame(above_ema50).reindex(close_df.index)
+    breadth = breadth_df.mean(axis=1, skipna=True) * 100
+    market_positive = (proxy_ema20 > proxy_ema50) & (proxy_slope5 > 0) & (breadth >= 55)
+
+    trades = []
+
+    for symbol, a in prepared.items():
+        start_pos = max(220, len(a) - test_days)
+        end_pos = len(a) - max_hold_days - 1
+
+        cond = (
+            a['QUALITY_GATE']
+            & (a['QUALITY_SCORE'] >= min_quality)
+            & (a['VOLUME_SCORE'] >= min_volume)
+            & a['VOLUME_GATE']
+            & market_positive.reindex(a.index).fillna(False)
+        )
+
+        last_event_pos = -10000
+        prev = False
+
+        for pos in range(start_pos, end_pos + 1):
+            is_on = bool(cond.iloc[pos])
+            new_event = is_on and (not prev) and (pos - last_event_pos >= cooldown_days)
+            prev = is_on
+
+            if not new_event:
+                continue
+
+            entry = float(a['Close'].iloc[pos])
+            atr = float(a['ATR'].iloc[pos]) if pd.notna(a['ATR'].iloc[pos]) else None
+            prior_low = float(a['PRIOR_LOW20_V4'].iloc[pos]) if pd.notna(a['PRIOR_LOW20_V4'].iloc[pos]) else None
+            if atr is None or atr <= 0:
+                continue
+
+            # Destek altı stop. Risk çok dar/geniş olmasın.
+            if prior_low is None or prior_low >= entry:
+                risk_pct = min(max((1.75 * atr / entry) * 100.0, 1.0), 7.0)
+            else:
+                raw_stop = prior_low - 0.25 * atr
+                risk_pct = ((entry - raw_stop) / entry) * 100.0
+                risk_pct = min(max(risk_pct, 1.0), 7.0)
+
+            stop_price = entry * (1.0 - risk_pct / 100.0)
+            target_price = entry + reward_r * (entry - stop_price)
+
+            exit_price = None
+            exit_reason = None
+            exit_pos = None
+
+            last_pos = min(len(a)-1, pos + max_hold_days)
+            for j in range(pos + 1, last_pos + 1):
+                low = float(a['Low'].iloc[j])
+                high = float(a['High'].iloc[j])
+
+                stop_hit = low <= stop_price
+                target_hit = high >= target_price
+
+                # Günlük OHLC sıralaması bilinmediği için muhafazakâr: aynı gün ikisi de varsa stop.
+                if stop_hit and target_hit:
+                    exit_price = stop_price
+                    exit_reason = 'STOP'
+                    exit_pos = j
+                    break
+                if stop_hit:
+                    exit_price = stop_price
+                    exit_reason = 'STOP'
+                    exit_pos = j
+                    break
+                if target_hit:
+                    exit_price = target_price
+                    exit_reason = 'TARGET'
+                    exit_pos = j
+                    break
+
+            if exit_price is None:
+                exit_pos = last_pos
+                exit_price = float(a['Close'].iloc[exit_pos])
+                exit_reason = 'TIME'
+
+            gross = ((exit_price / entry) - 1.0) * 100.0
+            net = gross - cost_pct
+
+            trades.append({
+                'symbol': symbol,
+                'entry_date': pd.Timestamp(a.index[pos]).date().isoformat(),
+                'entry_price': round(entry, 2),
+                'exit_date': pd.Timestamp(a.index[exit_pos]).date().isoformat(),
+                'exit_price': round(float(exit_price), 2),
+                'exit_reason': exit_reason,
+                'net_return_pct': round(float(net), 2),
+                'quality_score': round(float(a['QUALITY_SCORE'].iloc[pos]), 2),
+                'volume_score': round(float(a['VOLUME_SCORE'].iloc[pos]), 2),
+                'rvol': round(float(a['RVOL20'].iloc[pos]), 2) if pd.notna(a['RVOL20'].iloc[pos]) else None,
+                'cmf': round(float(a['CMF20'].iloc[pos]), 3) if pd.notna(a['CMF20'].iloc[pos]) else None,
+                'stop_price': round(stop_price, 2),
+                'target_price': round(target_price, 2),
+                'hold_days': int(exit_pos - pos),
+                'status': 'KÂR' if net > 0 else 'ZARAR',
+            })
+
+            last_event_pos = pos
+
+    trades.sort(key=lambda x: x['entry_date'], reverse=True)
+
+    return {
+        'ok': True,
+        'model': 'v4_trade_history',
+        'count': len(trades),
+        'settings': {
+            'test_days': test_days,
+            'min_quality': min_quality,
+            'min_volume': min_volume,
+            'cost_bps': cost_bps,
+            'cooldown_days': cooldown_days,
+            'max_hold_days': max_hold_days,
+            'reward_r': reward_r,
+            'exit_rules': 'destek altı stop + 2R hedef + maksimum bekleme',
+        },
+        'trades': trades[:limit],
+    }
