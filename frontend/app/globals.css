@@ -373,3 +373,34 @@ button,select{font:inherit}
   .newsCard{grid-template-columns:1fr}
   .newsThumb{display:none}
 }
+
+/* V12 real news images */
+.newsThumb{position:relative}
+.newsThumb img{
+  position:absolute;
+  inset:0;
+  width:100%;
+  height:100%;
+  object-fit:cover;
+  display:block;
+  z-index:2
+}
+.newsThumb .thumbFallback{
+  position:absolute;
+  inset:0;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  z-index:1
+}
+.newsThumb .thumbFallback>span{
+  position:absolute;
+  right:9px;
+  bottom:8px;
+  font-size:10px;
+  font-weight:800;
+  letter-spacing:.7px;
+  color:rgba(255,255,255,.8)
+}
+.newsThumb img:not([style*="display: none"]) + .thumbFallback{opacity:0}
+.newsThumb.imageFailed .thumbFallback{opacity:1}

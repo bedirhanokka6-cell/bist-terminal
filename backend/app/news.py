@@ -6,6 +6,9 @@ from typing import Any
 from urllib.parse import quote_plus
 from urllib.request import Request, urlopen
 import xml.etree.ElementTree as ET
+import re
+import html as html_lib
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 
 COMPANY_NAMES = {
@@ -60,6 +63,78 @@ def _published_iso(v: str | None) -> str | None:
         return v
 
 
+
+_IMAGE_CACHE: dict[str, str | None] = {}
+
+def _first_image_from_description(description: str | None) -> str | None:
+    if not description:
+        return None
+    txt = html_lib.unescape(description)
+    m = re.search(r'<img[^>]+src=["\']([^"\']+)["\']', txt, re.I)
+    if m:
+        return m.group(1)
+    return None
+
+
+def _extract_og_image(url: str) -> str | None:
+    if not url:
+        return None
+    if url in _IMAGE_CACHE:
+        return _IMAGE_CACHE[url]
+
+    try:
+        req = Request(
+            url,
+            headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36",
+                "Accept": "text/html,application/xhtml+xml",
+            },
+        )
+        with urlopen(req, timeout=4) as res:
+            content_type = res.headers.get("Content-Type", "")
+            if "text/html" not in content_type:
+                _IMAGE_CACHE[url] = None
+                return None
+            body = res.read(350_000).decode("utf-8", errors="ignore")
+
+        patterns = [
+            r'<meta[^>]+property=["\']og:image["\'][^>]+content=["\']([^"\']+)["\']',
+            r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+property=["\']og:image["\']',
+            r'<meta[^>]+name=["\']twitter:image["\'][^>]+content=["\']([^"\']+)["\']',
+            r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+name=["\']twitter:image["\']',
+        ]
+        for p in patterns:
+            m = re.search(p, body, re.I)
+            if m:
+                img = html_lib.unescape(m.group(1)).strip()
+                if img.startswith("//"):
+                    img = "https:" + img
+                if img.startswith("http://") or img.startswith("https://"):
+                    _IMAGE_CACHE[url] = img
+                    return img
+    except Exception:
+        pass
+
+    _IMAGE_CACHE[url] = None
+    return None
+
+
+def _fill_missing_images(rows: list[dict[str, Any]], max_items: int = 16) -> list[dict[str, Any]]:
+    targets = [(i, x.get("url")) for i, x in enumerate(rows[:max_items]) if not x.get("image_url") and x.get("url")]
+    if not targets:
+        return rows
+
+    with ThreadPoolExecutor(max_workers=6) as ex:
+        futures = {ex.submit(_extract_og_image, url): i for i, url in targets}
+        for fut in as_completed(futures):
+            i = futures[fut]
+            try:
+                rows[i]["image_url"] = fut.result()
+            except Exception:
+                rows[i]["image_url"] = None
+    return rows
+
+
 def _rss(query: str, limit: int = 20) -> list[dict[str, Any]]:
     url = (
         "https://news.google.com/rss/search?"
@@ -85,6 +160,18 @@ def _rss(query: str, limit: int = 20) -> list[dict[str, Any]]:
         pub = _published_iso(item.findtext("pubDate"))
         source_el = item.find("source")
         source = _clean_text(source_el.text if source_el is not None else "")
+        description = item.findtext("description")
+
+        image_url = _first_image_from_description(description)
+
+        if not image_url:
+            for child in list(item):
+                tag = child.tag.lower()
+                if tag.endswith("content") or tag.endswith("thumbnail"):
+                    candidate = child.attrib.get("url")
+                    if candidate and candidate.startswith(("http://", "https://")):
+                        image_url = candidate
+                        break
 
         if not title or not link:
             continue
@@ -94,6 +181,7 @@ def _rss(query: str, limit: int = 20) -> list[dict[str, Any]]:
             "url": link,
             "source": source or "Google News",
             "published_at": pub,
+            "image_url": image_url,
         })
 
     return out
@@ -124,7 +212,8 @@ def company_news(symbol: str, limit: int = 20) -> list[dict[str, Any]]:
             continue
 
     rows.sort(key=lambda x: x.get("published_at") or "", reverse=True)
-    return rows[:limit]
+    rows = rows[:limit]
+    return _fill_missing_images(rows, max_items=min(16, limit))
 
 
 def kap_notifications(symbol: str, limit: int = 15) -> list[dict[str, Any]]:
@@ -157,7 +246,8 @@ def kap_notifications(symbol: str, limit: int = 15) -> list[dict[str, Any]]:
             continue
 
     rows.sort(key=lambda x: x.get("published_at") or "", reverse=True)
-    return rows[:limit]
+    rows = rows[:limit]
+    return _fill_missing_images(rows, max_items=min(12, limit))
 
 
 POSITIVE_KEYWORDS = [

@@ -8,7 +8,7 @@ type Stock={symbol:string;price:number;change_pct:number};
 type Scanner={symbol:string;price:number;change_pct:number;score:number;state:string;rsi:number|null;vol_ratio:number|null;support:number;resistance:number};
 type SignalItem={id:number;symbol:string;signal_type:string;score:number;state:string;price:number;support:number|null;resistance:number|null;reasons:string[];created_at:string|null};
 type SignalStats={horizon_days:number;evaluated_total:number;directional_total:number;successful:number;failed:number;success_rate_pct:number|null;average_return_pct:number|null;note:string};
-type NewsItem={title:string;url:string;source:string;published_at:string|null;kind:'HABER'|'KAP';impact_score?:number;impact_label?:string;impact_reason?:string};
+type NewsItem={title:string;url:string;source:string;published_at:string|null;kind:'HABER'|'KAP';impact_score?:number;impact_label?:string;impact_reason?:string;image_url?:string|null};
 
 const API=process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 const periods=['1G','5G','1A','3A','6A','1Y','2Y'];
@@ -346,8 +346,13 @@ export default function Home(){
                 </div>
               </div>
               <div className={`newsThumb ${n.kind==='KAP'?'kapThumb':''}`}>
-                <div className="thumbBars"><i/><i/><i/><i/></div>
-                <span>{n.kind==='KAP'?'KAP':'BIST'}</span>
+                {n.image_url?
+                  <img src={n.image_url} alt={n.title} loading="lazy" referrerPolicy="no-referrer" onError={(e:any)=>{e.currentTarget.style.display='none';e.currentTarget.parentElement?.classList.add('imageFailed')}}/>
+                  :null}
+                <div className="thumbFallback">
+                  <div className="thumbBars"><i/><i/><i/><i/></div>
+                  <span>{n.kind==='KAP'?'KAP':'BIST'}</span>
+                </div>
               </div>
               <span className="newsOpen">↗</span>
             </a>
