@@ -8,7 +8,7 @@ type Stock={symbol:string;price:number;change_pct:number};
 type Scanner={symbol:string;price:number;change_pct:number;score:number;state:string;rsi:number|null;vol_ratio:number|null;support:number;resistance:number};
 type SignalItem={id:number;symbol:string;signal_type:string;score:number;state:string;price:number;support:number|null;resistance:number|null;reasons:string[];created_at:string|null};
 type SignalStats={horizon_days:number;evaluated_total:number;directional_total:number;successful:number;failed:number;success_rate_pct:number|null;average_return_pct:number|null;note:string};
-type NewsItem={title:string;url:string;source:string;published_at:string|null;kind:'HABER'|'KAP'};
+type NewsItem={title:string;url:string;source:string;published_at:string|null;kind:'HABER'|'KAP';impact_score?:number;impact_label?:string;impact_reason?:string};
 
 const API=process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 const periods=['1G','5G','1A','3A','6A','1Y','2Y'];
@@ -330,14 +330,26 @@ export default function Home(){
         <div className="newsGrid">
           {(newsItems.filter((n:any)=>newsTab==='ALL'||n.kind===newsTab)).map((n:any,i:number)=>
             <a className="newsCard panel" href={n.url} target="_blank" rel="noreferrer" key={`${n.kind}-${n.title}-${i}`}>
-              <div className="newsMeta">
-                <span className={`newsKind ${n.kind==='KAP'?'kap':''}`}>{n.kind}</span>
-                <span>{n.source||'Kaynak'}</span>
-                <span>•</span>
-                <span>{formatNewsDate(n.published_at)}</span>
+              <div className="newsCardBody">
+                <div className="newsMeta">
+                  <span className={`newsKind ${n.kind==='KAP'?'kap':''}`}>{n.kind}</span>
+                  <span>{n.source||'Kaynak'}</span>
+                  <span>•</span>
+                  <span>{formatNewsDate(n.published_at)}</span>
+                </div>
+                <h3>{n.title}</h3>
+                <p className="newsImpactReason">{n.impact_reason || 'Haber başlığına göre otomatik etki değerlendirmesi.'}</p>
+                <div className="newsBottom">
+                  <span className={`impactBadge ${impactClass(n.impact_label)}`}>Olası Etki: {n.impact_label || 'NÖTR'}</span>
+                  <span className="impactScore">Etki Skoru: {n.impact_score==null?'—':`${Number(n.impact_score).toFixed(1)}/10`}</span>
+                  <span className="newsSource">Kaynak: {n.source||'—'}</span>
+                </div>
               </div>
-              <h3>{n.title}</h3>
-              <div className="newsOpen">Haberi aç ↗</div>
+              <div className={`newsThumb ${n.kind==='KAP'?'kapThumb':''}`}>
+                <div className="thumbBars"><i/><i/><i/><i/></div>
+                <span>{n.kind==='KAP'?'KAP':'BIST'}</span>
+              </div>
+              <span className="newsOpen">↗</span>
             </a>
           )}
         </div>
@@ -458,3 +470,9 @@ function formatDate(v:string|null){if(!v)return '—';try{return new Intl.DateTi
 function formatDataTime(v:string){try{return new Intl.DateTimeFormat('tr-TR',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit'}).format(new Date(v))}catch{return v}}
 
 function formatNewsDate(v:string|null){if(!v)return '—';try{return new Intl.DateTimeFormat('tr-TR',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'}).format(new Date(v))}catch{return v}}
+
+function impactClass(v:string|undefined){
+  if(v==='GÜÇLÜ OLUMLU'||v==='OLUMLU')return 'positive';
+  if(v==='GÜÇLÜ OLUMSUZ'||v==='OLUMSUZ')return 'negative';
+  return 'neutral';
+}

@@ -118,6 +118,7 @@ def company_news(symbol: str, limit: int = 20) -> list[dict[str, Any]]:
                     continue
                 seen.add(key)
                 x["kind"] = "HABER"
+                x.update(news_impact(x.get("title",""), "HABER"))
                 rows.append(x)
         except Exception:
             continue
@@ -150,9 +151,64 @@ def kap_notifications(symbol: str, limit: int = 15) -> list[dict[str, Any]]:
                     continue
                 seen.add(key)
                 x["kind"] = "KAP"
+                x.update(news_impact(x.get("title",""), "KAP"))
                 rows.append(x)
         except Exception:
             continue
 
     rows.sort(key=lambda x: x.get("published_at") or "", reverse=True)
     return rows[:limit]
+
+
+POSITIVE_KEYWORDS = [
+    "temettü", "temettu", "sözleşme", "sozlesme", "ihale", "yatırım", "yatirim",
+    "kapasite art", "kar art", "kâr art", "rekor", "geri alım", "geri alim",
+    "hedef fiyat yüksel", "hedef fiyat yuks", "not artır", "not artir",
+    "yeni anlaşma", "yeni anlasma", "ihracat", "büyüme", "buyume"
+]
+
+NEGATIVE_KEYWORDS = [
+    "zarar", "ceza", "soruşturma", "sorusturma", "dava", "iptal",
+    "hedef fiyat düş", "hedef fiyat dus", "not düş", "not dus",
+    "satış baskısı", "satis baskisi", "temerrüt", "temerrut",
+    "üretim durdu", "uretim durdu", "kapatıldı", "kapatildi"
+]
+
+
+def news_impact(title: str, kind: str = "HABER") -> dict[str, Any]:
+    t = (title or "").lower()
+    score = 5.0
+    reasons = []
+
+    pos_hits = [k for k in POSITIVE_KEYWORDS if k in t]
+    neg_hits = [k for k in NEGATIVE_KEYWORDS if k in t]
+
+    if pos_hits:
+        score += min(3.0, 0.9 * len(pos_hits))
+        reasons.append("Olumlu anahtar kelime")
+    if neg_hits:
+        score -= min(3.0, 1.0 * len(neg_hits))
+        reasons.append("Olumsuz anahtar kelime")
+
+    if kind == "KAP":
+        score += 0.3
+        reasons.append("KAP kaynağı daha yüksek ağırlık")
+
+    score = max(0.0, min(10.0, score))
+
+    if score >= 7.5:
+        label = "GÜÇLÜ OLUMLU"
+    elif score >= 6.0:
+        label = "OLUMLU"
+    elif score <= 2.5:
+        label = "GÜÇLÜ OLUMSUZ"
+    elif score <= 4.0:
+        label = "OLUMSUZ"
+    else:
+        label = "NÖTR"
+
+    return {
+        "impact_score": round(score, 1),
+        "impact_label": label,
+        "impact_reason": reasons[0] if reasons else "Başlıktan belirgin yön çıkarılamadı",
+    }
