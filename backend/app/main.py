@@ -760,6 +760,182 @@ def v6_position_history(
     }
 
 
+
+
+# ==========================================================
+# V9 FINAL — BACKTEST İLE CANLI SİNYALİN AYNI ZAMAN DİLİMİ
+# ==========================================================
+
+def _batch_daily_signal_data():
+    """BIST30 için sinyal üretiminde kullanılan günlük veriyi tek istekte al."""
+    tickers = [s + '.IS' for s in BIST30]
+    return yf.download(
+        tickers=tickers,
+        period='18mo',
+        interval='1d',
+        auto_adjust=False,
+        progress=False,
+        threads=True,
+        group_by='ticker',
+    )
+
+
+def _extract_ticker_frame(batch, symbol: str):
+    ticker = symbol + '.IS'
+    if isinstance(batch.columns, pd.MultiIndex):
+        if ticker not in batch.columns.get_level_values(0):
+            return pd.DataFrame()
+        d = batch[ticker].copy()
+    else:
+        d = batch.copy()
+    return d.dropna(subset=['Open','High','Low','Close'])
+
+
+def _v9_completed_daily_frame(d: pd.DataFrame) -> pd.DataFrame:
+    """
+    Piyasa açıkken bugünkü günlük mum tamamlanmamıştır.
+    Sinyal için yalnızca kapanmış günlük mumları kullan.
+    """
+    if d is None or len(d) == 0:
+        return d
+
+    x = d.copy()
+    try:
+        today = pd.Timestamp.now(tz='Europe/Istanbul').date()
+    except Exception:
+        today = pd.Timestamp.now().date()
+
+    last_date = pd.Timestamp(x.index[-1]).date()
+    if last_date >= today and len(x) >= 2:
+        x = x.iloc[:-1]
+    return x
+
+
+def _v9_daily_market_regime(daily_batch):
+    """
+    Backtest ile aynı mantık:
+    equal-weight BIST30 proxy + EMA20/50 + EMA20 slope + breadth.
+    STRONG = trend pozitif ve breadth >= %65.
+    POSITIVE = trend pozitif ve breadth >= %55.
+    """
+    from .analysis_v5 import prepare_v5
+
+    prepared = {}
+    close_map = {}
+
+    for symbol in BIST30:
+        try:
+            d = _v9_completed_daily_frame(_extract_ticker_frame(daily_batch, symbol))
+            if d is None or len(d) < 220:
+                continue
+            a = prepare_v5(d)
+            prepared[symbol] = a
+            close_map[symbol] = a['Close']
+        except Exception:
+            continue
+
+    if not close_map:
+        return {
+            'state': 'UNKNOWN',
+            'strong': False,
+            'positive': False,
+            'breadth_pct': None,
+            'proxy_slope5_pct': None,
+            'date': None,
+        }, prepared
+
+    close_df = pd.DataFrame(close_map).sort_index()
+    returns = close_df.pct_change(fill_method=None)
+    proxy = (1 + returns.mean(axis=1, skipna=True).fillna(0)).cumprod() * 100
+    ema20 = proxy.ewm(span=20, adjust=False).mean()
+    ema50 = proxy.ewm(span=50, adjust=False).mean()
+    slope5 = (ema20 / ema20.shift(5) - 1) * 100
+
+    above = {}
+    for symbol, a in prepared.items():
+        above[symbol] = a['Close'] > a['EMA50']
+    breadth_df = pd.DataFrame(above).reindex(close_df.index)
+    breadth = breadth_df.mean(axis=1, skipna=True) * 100
+
+    trend_ok = bool((ema20.iloc[-1] > ema50.iloc[-1]) and (slope5.iloc[-1] > 0))
+    b = float(breadth.iloc[-1])
+    strong = bool(trend_ok and b >= 65)
+    positive = bool(trend_ok and b >= 55)
+
+    state = 'STRONG' if strong else ('POSITIVE' if positive else 'WEAK')
+    return {
+        'state': state,
+        'strong': strong,
+        'positive': positive,
+        'breadth_pct': round(b, 2),
+        'proxy_slope5_pct': round(float(slope5.iloc[-1]), 3),
+        'date': pd.Timestamp(close_df.index[-1]).date().isoformat(),
+    }, prepared
+
+
+def _v9_trade_levels(a, entry_price: float):
+    """
+    Final ileri-test profili:
+    destek/ATR stop, en fazla %6; Hedef1=1R, Hedef2=2R.
+    """
+    try:
+        l = a.iloc[-1]
+        atr = float(l['ATR']) if pd.notna(l.get('ATR')) else None
+        prior_low = float(l['PRIOR_LOW20_V4']) if pd.notna(l.get('PRIOR_LOW20_V4')) else None
+    except Exception:
+        atr = None
+        prior_low = None
+
+    if atr is None or atr <= 0:
+        risk_pct = 3.0
+    elif prior_low is None or prior_low >= entry_price:
+        risk_pct = (1.75 * atr / entry_price) * 100.0
+    else:
+        raw_stop = prior_low - 0.25 * atr
+        risk_pct = ((entry_price - raw_stop) / entry_price) * 100.0
+
+    risk_pct = min(max(float(risk_pct), 1.0), 6.0)
+    stop = entry_price * (1.0 - risk_pct / 100.0)
+    one_r = entry_price - stop
+
+    return {
+        'risk_pct': round(risk_pct, 2),
+        'stop_price': round(stop, 2),
+        'target1_price': round(entry_price + one_r, 2),
+        'target2_price': round(entry_price + 2.0 * one_r, 2),
+    }
+
+
+@app.get('/api/v9/live-status')
+def v9_live_status(db: Session = Depends(get_db)):
+    open_count = (
+        db.query(OpenSignalPosition)
+        .filter(OpenSignalPosition.status == 'OPEN')
+        .count()
+    )
+    try:
+        daily = _batch_daily_signal_data()
+        regime, _ = _v9_daily_market_regime(daily)
+    except Exception as exc:
+        regime = {'state': 'UNKNOWN', 'error': str(exc)}
+
+    return {
+        'ok': True,
+        'model': 'v9_final_forward_test',
+        'mode': 'PAPER_FORWARD_TEST',
+        'real_money_orders': False,
+        'signal_timeframe': 'completed_daily_candle',
+        'entry_execution': 'next live scan/current market price after completed signal',
+        'entry_rule': 'STRONG_CONFIRMATION_BASE + STRONG market regime',
+        'watch_only': ['BREAKOUT', 'ERKEN_TREND', 'KIRILIM_YAKIN'],
+        'risk': 'support/ATR, max %6',
+        'target1': '1R alert',
+        'target2': '2R close',
+        'max_hold': '10 trading days',
+        'open_positions': open_count,
+        'market_regime': regime,
+    }
+
 @app.post('/api/alerts/scan')
 def scan_and_notify(
     x_alert_key: str | None = Header(default=None, alias='x-alert-key'),
@@ -792,6 +968,20 @@ def scan_and_notify(
         data = _batch_alert_scan_data()
     except Exception as exc:
         raise HTTPException(503, f'Piyasa verisi alınamadı: {exc}')
+
+    # V9: teknik sinyal günlük kapanmış mumdan; intraday veri yalnız fiyat/stop takibi için.
+    try:
+        daily_signal_data = _batch_daily_signal_data()
+        v9_market, v9_prepared = _v9_daily_market_regime(daily_signal_data)
+    except Exception as exc:
+        daily_signal_data = None
+        v9_prepared = {}
+        v9_market = {
+            'state': 'UNKNOWN',
+            'strong': False,
+            'positive': False,
+            'error': str(exc),
+        }
 
     fired = []
 
@@ -974,105 +1164,120 @@ def scan_and_notify(
                     f'MACD yukarı kesişim oluştu • Fiyat {price:.2f} ₺'
                 ))
 
-            # V5 genel erken trend / breakout uyarıları.
+            # --------------------------------------------------
+            # V9 FINAL: günlük kapanmış mumlarla izleme + paper forward giriş.
+            # 30 dakikalık veri sadece güncel fiyat ve açık pozisyon yönetiminde kullanılır.
+            # --------------------------------------------------
             try:
                 from .analysis_v5 import latest_v5
-                v5 = latest_v5(d, market_positive=True)
-                sig = v5.get('signal')
 
-                if sig == 'ERKEN_TREND':
-                    rules.append((
-                        'v5_early_trend',
-                        f'{symbol} erken trend uyarısı',
-                        f'Yeni pozitif trend yapısı • Fiyat {price:.2f} ₺ • RVOL {v5.get("rvol") or 0:.2f}x • Skor {v5.get("early_move_score") or 0:.1f}/10'
-                    ))
-                elif sig == 'BREAKOUT':
-                    rules.append((
-                        'v5_breakout',
-                        f'{symbol} hacimli kırılım',
-                        f'20 dönem direnç kırılımı • Fiyat {price:.2f} ₺ • RVOL {v5.get("rvol") or 0:.2f}x • Hacim skoru {v5.get("volume_score") or 0:.1f}/10'
-                    ))
-                elif sig == 'KIRILIM_YAKIN':
-                    rules.append((
-                        'v5_near_breakout',
-                        f'{symbol} kırılıma yaklaşıyor',
-                        f'Kısa vadeli dirence yakın • Fiyat {price:.2f} ₺ • Mesafe %{v5.get("distance_to_high_pct") or 0:.2f}'
-                    ))
-            except Exception:
-                pass
-
-            # V6: BREAKOUT ve GUCLU_TEKNIK_TEYIT için tek açık sinyal pozisyonu oluştur.
-            # ERKEN_TREND yalnızca İZLE olarak kalır.
-            try:
-                from .analysis_v5 import latest_v5
-                v6 = latest_v5(d, market_positive=True)
-                v6_sig = v6.get('signal')
-
-                if v6_sig in {'BREAKOUT', 'GUCLU_TEKNIK_TEYIT'}:
-                    existing = (
-                        db.query(OpenSignalPosition)
-                        .filter(
-                            OpenSignalPosition.symbol == symbol,
-                            OpenSignalPosition.status == 'OPEN',
-                        )
-                        .first()
+                daily_a = v9_prepared.get(symbol)
+                if daily_a is not None and len(daily_a) >= 220:
+                    v9_watch = latest_v5(
+                        _v9_completed_daily_frame(_extract_ticker_frame(daily_signal_data, symbol)),
+                        market_positive=v9_market.get('positive', False),
                     )
 
-                    if existing is None:
-                        levels = _v6_trade_levels(d, price)
-                        new_pos = OpenSignalPosition(
-                            symbol=symbol,
-                            signal_type=v6_sig,
-                            entry_price=price,
-                            stop_price=levels['stop_price'],
-                            target1_price=levels['target1_price'],
-                            target2_price=levels['target2_price'],
-                            risk_pct=levels['risk_pct'],
-                            quality_score=v6.get('quality_score'),
-                            volume_score=v6.get('volume_score'),
-                            early_move_score=v6.get('early_move_score'),
-                            status='OPEN',
-                            target1_hit=False,
-                            last_price=price,
-                        )
-                        db.add(new_pos)
-                        db.commit()
-                        db.refresh(new_pos)
+                    watch_sig = v9_watch.get('signal')
+                    if watch_sig == 'BREAKOUT':
+                        rules.append((
+                            'v9_watch_breakout',
+                            f'{symbol} — BREAKOUT / İZLE',
+                            f'Günlük direnç kırılımı • Fiyat {price:.2f} ₺ • '
+                            f'RVOL {v9_watch.get("rvol") or 0:.2f}x • '
+                            f'Piyasa {v9_market.get("state","UNKNOWN")}'
+                        ))
+                    elif watch_sig == 'ERKEN_TREND':
+                        rules.append((
+                            'v9_watch_early',
+                            f'{symbol} — ERKEN TREND / İZLE',
+                            f'Günlük trend güçleniyor • Fiyat {price:.2f} ₺ • '
+                            f'Piyasa {v9_market.get("state","UNKNOWN")}'
+                        ))
+                    elif watch_sig == 'KIRILIM_YAKIN':
+                        rules.append((
+                            'v9_watch_near',
+                            f'{symbol} — KIRILIMA YAKIN / İZLE',
+                            f'Dirence yakın • Fiyat {price:.2f} ₺ • '
+                            f'Piyasa {v9_market.get("state","UNKNOWN")}'
+                        ))
 
-                        label = 'BREAKOUT' if v6_sig == 'BREAKOUT' else 'GÜÇLÜ TEKNİK TEYİT'
-                        entry_title = f'{symbol} — {label}'
-                        entry_body = (
-                            f'Fiyat {price:.2f} ₺ • Stop {levels["stop_price"]:.2f} ₺ '
-                            f'• Hedef 1 {levels["target1_price"]:.2f} ₺ '
-                            f'• Hedef 2 {levels["target2_price"]:.2f} ₺ '
-                            f'• Teknik {v6.get("quality_score") or 0:.1f}/10 '
-                            f'• Hacim {v6.get("volume_score") or 0:.1f}/10'
+                    # Final paper-forward giriş:
+                    # yalnız güçlü teknik teyit + STRONG piyasa.
+                    last_daily = daily_a.iloc[-1]
+                    final_entry = bool(
+                        last_daily.get('STRONG_CONFIRMATION_BASE', False)
+                        and v9_market.get('strong', False)
+                    )
+
+                    if final_entry:
+                        existing = (
+                            db.query(OpenSignalPosition)
+                            .filter(
+                                OpenSignalPosition.symbol == symbol,
+                                OpenSignalPosition.status == 'OPEN',
+                            )
+                            .first()
                         )
 
-                        push_result = send_push(
-                            tokens=tokens,
-                            title=entry_title,
-                            body=entry_body,
-                            data={
-                                'symbol': symbol,
-                                'rule': 'v6_entry',
-                                'position_id': str(new_pos.id),
-                                'signal_type': v6_sig,
-                            },
-                        )
-                        if push_result.get('success_count', 0) > 0:
-                            _record_alert(db, symbol, f'v6_entry_{new_pos.id}', entry_title, entry_body)
-                            fired.append({
-                                'symbol': symbol,
-                                'rule': 'v6_entry',
-                                'title': entry_title,
-                                'success_count': push_result.get('success_count', 0),
-                            })
+                        if existing is None:
+                            levels = _v9_trade_levels(daily_a, price)
+                            new_pos = OpenSignalPosition(
+                                symbol=symbol,
+                                signal_type='V9_STRONG_PAPER',
+                                entry_price=price,
+                                stop_price=levels['stop_price'],
+                                target1_price=levels['target1_price'],
+                                target2_price=levels['target2_price'],
+                                risk_pct=levels['risk_pct'],
+                                quality_score=float(last_daily.get('QUALITY_SCORE', 0) or 0),
+                                volume_score=float(last_daily.get('VOLUME_SCORE', 0) or 0),
+                                early_move_score=float(last_daily.get('EARLY_MOVE_SCORE', 0) or 0),
+                                status='OPEN',
+                                target1_hit=False,
+                                last_price=price,
+                            )
+                            db.add(new_pos)
+                            db.commit()
+                            db.refresh(new_pos)
+
+                            entry_title = f'{symbol} — V9 GÜÇLÜ TEYİT / PAPER'
+                            entry_body = (
+                                f'Giriş {price:.2f} ₺ • Stop {levels["stop_price"]:.2f} ₺ '
+                                f'• H1 {levels["target1_price"]:.2f} ₺ '
+                                f'• H2 {levels["target2_price"]:.2f} ₺ '
+                                f'• Teknik {float(last_daily.get("QUALITY_SCORE",0) or 0):.1f}/10 '
+                                f'• Hacim {float(last_daily.get("VOLUME_SCORE",0) or 0):.1f}/10 '
+                                f'• Piyasa STRONG'
+                            )
+
+                            push_result = send_push(
+                                tokens=tokens,
+                                title=entry_title,
+                                body=entry_body,
+                                data={
+                                    'symbol': symbol,
+                                    'rule': 'v9_paper_entry',
+                                    'position_id': str(new_pos.id),
+                                    'signal_type': 'V9_STRONG_PAPER',
+                                },
+                            )
+                            if push_result.get('success_count', 0) > 0:
+                                _record_alert(
+                                    db, symbol, f'v9_paper_entry_{new_pos.id}',
+                                    entry_title, entry_body
+                                )
+                                fired.append({
+                                    'symbol': symbol,
+                                    'rule': 'v9_paper_entry',
+                                    'title': entry_title,
+                                    'success_count': push_result.get('success_count', 0),
+                                })
             except Exception:
                 db.rollback()
 
             for rule_key, title, body in rules:
-                cooldown_minutes = 360 if rule_key.startswith('v5_') else 60
+                cooldown_minutes = 360 if (rule_key.startswith('v5_') or rule_key.startswith('v9_watch_')) else 60
                 if _cooldown_exists(db, symbol, rule_key, minutes=cooldown_minutes):
                     continue
 
@@ -3678,3 +3883,248 @@ def backtest_v8_adaptive_risk(
             'Backtest geçmiş performanstır; geleceği garanti etmez.',
         ],
     }
+
+
+@app.get('/api/backtest/v9-forward')
+def backtest_v9_forward(
+    test_days: int = Query(default=756, ge=504, le=1008),
+    cost_bps: int = Query(default=20, ge=0, le=100),
+    cooldown_days: int = Query(default=5, ge=1, le=20),
+    max_hold_days: int = Query(default=10, ge=3, le=20),
+    folds: int = Query(default=6, ge=4, le=8),
+):
+    """
+    Final forward-like validation:
+    - sinyal t günü kapanmış günlük mumda hesaplanır
+    - işlem t+1 gün OPEN fiyatından başlatılır
+    - yalnız STRONG market + STRONG_CONFIRMATION_BASE
+    - stop cap %6, hedef 2R, max 10 gün
+    - dönemi kronolojik fold'lara böler; optimizasyon yapmaz
+    """
+    from .analysis_v5 import prepare_v5
+
+    tickers = [s + '.IS' for s in BIST30]
+    cost_pct = cost_bps / 100.0
+
+    try:
+        raw = yf.download(
+            tickers=tickers,
+            period='5y',
+            interval='1d',
+            auto_adjust=False,
+            progress=False,
+            threads=True,
+            group_by='ticker',
+        )
+    except Exception as exc:
+        raise HTTPException(503, f'V9 backtest verisi alınamadı: {exc}')
+
+    prepared = {}
+    close_map = {}
+    for symbol in BIST30:
+        try:
+            d = _extract_ticker_frame(raw, symbol)
+            if len(d) < 300:
+                continue
+            a = prepare_v5(d)
+            prepared[symbol] = a
+            close_map[symbol] = a['Close']
+        except Exception:
+            continue
+
+    if not prepared:
+        raise HTTPException(503, 'V9 için yeterli veri yok')
+
+    close_df = pd.DataFrame(close_map).sort_index()
+    returns = close_df.pct_change(fill_method=None)
+    proxy = (1 + returns.mean(axis=1, skipna=True).fillna(0)).cumprod() * 100
+    ema20 = proxy.ewm(span=20, adjust=False).mean()
+    ema50 = proxy.ewm(span=50, adjust=False).mean()
+    slope5 = (ema20 / ema20.shift(5) - 1) * 100
+
+    above = {
+        symbol: a['Close'] > a['EMA50']
+        for symbol, a in prepared.items()
+    }
+    breadth = pd.DataFrame(above).reindex(close_df.index).mean(axis=1, skipna=True) * 100
+    strong_market = (
+        (ema20 > ema50)
+        & (slope5 > 0)
+        & (breadth >= 65)
+    )
+
+    all_dates = close_df.index
+    start_date = all_dates[-test_days] if len(all_dates) >= test_days else all_dates[0]
+    eval_dates = all_dates[all_dates >= start_date]
+
+    events = []
+
+    for symbol, a in prepared.items():
+        start_pos = max(220, len(a) - test_days)
+        end_pos = len(a) - max_hold_days - 2
+        cond = (
+            a['STRONG_CONFIRMATION_BASE']
+            & strong_market.reindex(a.index).fillna(False)
+        )
+
+        last_event_pos = -10000
+        prev = False
+
+        for signal_pos in range(start_pos, end_pos + 1):
+            is_on = bool(cond.iloc[signal_pos])
+            new_event = is_on and (not prev) and (signal_pos - last_event_pos >= cooldown_days)
+            prev = is_on
+            if not new_event:
+                continue
+
+            entry_pos = signal_pos + 1
+            entry = float(a['Open'].iloc[entry_pos])
+
+            # Risk levels are based only on information available on signal day.
+            l = a.iloc[signal_pos]
+            atr = float(l['ATR']) if pd.notna(l.get('ATR')) else None
+            prior_low = float(l['PRIOR_LOW20_V4']) if pd.notna(l.get('PRIOR_LOW20_V4')) else None
+
+            if atr is None or atr <= 0:
+                risk_pct = 3.0
+            elif prior_low is None or prior_low >= entry:
+                risk_pct = (1.75 * atr / entry) * 100.0
+            else:
+                raw_stop = prior_low - 0.25 * atr
+                risk_pct = ((entry - raw_stop) / entry) * 100.0
+
+            risk_pct = min(max(float(risk_pct), 1.0), 6.0)
+            stop = entry * (1 - risk_pct / 100.0)
+            one_r = entry - stop
+            target = entry + 2.0 * one_r
+
+            exit_price = None
+            exit_reason = None
+            exit_pos = None
+            last_pos = min(len(a)-1, entry_pos + max_hold_days - 1)
+
+            for j in range(entry_pos, last_pos + 1):
+                low = float(a['Low'].iloc[j])
+                high = float(a['High'].iloc[j])
+
+                stop_hit = low <= stop
+                target_hit = high >= target
+
+                if stop_hit and target_hit:
+                    exit_price = stop
+                    exit_reason = 'STOP'
+                    exit_pos = j
+                    break
+                if stop_hit:
+                    exit_price = stop
+                    exit_reason = 'STOP'
+                    exit_pos = j
+                    break
+                if target_hit:
+                    exit_price = target
+                    exit_reason = 'TARGET'
+                    exit_pos = j
+                    break
+
+            if exit_price is None:
+                exit_pos = last_pos
+                exit_price = float(a['Close'].iloc[exit_pos])
+                exit_reason = 'TIME'
+
+            net = ((exit_price / entry) - 1.0) * 100.0 - cost_pct
+            r_multiple = net / risk_pct if risk_pct else None
+
+            events.append({
+                'symbol': symbol,
+                'signal_date': pd.Timestamp(a.index[signal_pos]),
+                'entry_date': pd.Timestamp(a.index[entry_pos]),
+                'exit_date': pd.Timestamp(a.index[exit_pos]),
+                'entry': entry,
+                'exit': exit_price,
+                'net_return_pct': net,
+                'r_multiple': r_multiple,
+                'risk_pct': risk_pct,
+                'exit_reason': exit_reason,
+            })
+            last_event_pos = signal_pos
+
+    df = pd.DataFrame(events)
+    if df.empty:
+        return {'ok': True, 'model': 'v9_forward', 'events': 0, 'folds': []}
+
+    df = df.sort_values('entry_date').reset_index(drop=True)
+
+    # Fixed chronological folds across the evaluation window.
+    date_bins = [eval_dates[int(i * len(eval_dates) / folds)] for i in range(folds)]
+    date_bins.append(eval_dates[-1] + pd.Timedelta(days=1))
+
+    fold_rows = []
+    for i in range(folds):
+        lo, hi = date_bins[i], date_bins[i+1]
+        seg = df[(df['entry_date'] >= lo) & (df['entry_date'] < hi)].copy()
+        if seg.empty:
+            fold_rows.append({
+                'fold': i+1,
+                'start': pd.Timestamp(lo).date().isoformat(),
+                'end': (pd.Timestamp(hi)-pd.Timedelta(days=1)).date().isoformat(),
+                'events': 0,
+            })
+            continue
+
+        wins = int((seg['net_return_pct'] > 0).sum())
+        reasons = seg['exit_reason'].value_counts().to_dict()
+        fold_rows.append({
+            'fold': i+1,
+            'start': pd.Timestamp(lo).date().isoformat(),
+            'end': (pd.Timestamp(hi)-pd.Timedelta(days=1)).date().isoformat(),
+            'events': int(len(seg)),
+            'wins': wins,
+            'losses': int(len(seg)-wins),
+            'success_rate_pct': round(float(wins/len(seg)*100), 2),
+            'avg_net_return_pct': round(float(seg['net_return_pct'].mean()), 3),
+            'median_net_return_pct': round(float(seg['net_return_pct'].median()), 3),
+            'avg_r_multiple': round(float(seg['r_multiple'].mean()), 3),
+            'median_r_multiple': round(float(seg['r_multiple'].median()), 3),
+            'exit_reasons': {str(k): int(v) for k,v in reasons.items()},
+        })
+
+    wins = int((df['net_return_pct'] > 0).sum())
+    overall = {
+        'events': int(len(df)),
+        'wins': wins,
+        'losses': int(len(df)-wins),
+        'success_rate_pct': round(float(wins/len(df)*100), 2),
+        'avg_net_return_pct': round(float(df['net_return_pct'].mean()), 3),
+        'median_net_return_pct': round(float(df['net_return_pct'].median()), 3),
+        'avg_r_multiple': round(float(df['r_multiple'].mean()), 3),
+        'median_r_multiple': round(float(df['r_multiple'].median()), 3),
+        'positive_folds': int(sum(1 for x in fold_rows if x.get('avg_net_return_pct', 0) > 0)),
+        'total_nonempty_folds': int(sum(1 for x in fold_rows if x.get('events',0) > 0)),
+    }
+
+    return {
+        'ok': True,
+        'model': 'v9_forward_next_day_open',
+        'tested_symbols': len(prepared),
+        'settings': {
+            'test_days': test_days,
+            'cost_bps': cost_bps,
+            'cooldown_days': cooldown_days,
+            'max_hold_days': max_hold_days,
+            'folds': folds,
+            'signal': 'completed daily STRONG_CONFIRMATION_BASE + STRONG market',
+            'entry': 'next trading day OPEN',
+            'stop_cap_pct': 6,
+            'target_r': 2,
+            'same_day_rule': 'STOP first if target and stop both appear',
+        },
+        'overall': overall,
+        'folds': fold_rows,
+        'caveats': [
+            'This is still historical simulation, not a live fill record.',
+            'Current BIST30 composition is applied historically; survivorship bias may exist.',
+            'Yahoo Finance is not official real-time BIST data.',
+            'Daily OHLC cannot reveal intraday stop/target order; STOP-first is used conservatively.',
+        ],
+    }
+

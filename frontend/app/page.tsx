@@ -33,6 +33,7 @@ export default function Home(){
   const [tradeHistoryLoading,setTradeHistoryLoading]=useState(false);
   const [v5,setV5]=useState<any>(null);
   const [openPositions,setOpenPositions]=useState<any[]>([]);
+  const [v9Status,setV9Status]=useState<any>(null);
   const [mobileMenuOpen,setMobileMenuOpen]=useState(false);
 
   const loadSignals=async()=>{
@@ -86,6 +87,13 @@ export default function Home(){
     }catch{}
   };
 
+  const loadV9Status=async()=>{
+    try{
+      const r=await fetch(`${API}/api/v9/live-status`,{cache:'no-store'});
+      if(r.ok)setV9Status(await r.json());
+    }catch{}
+  };
+
   const loadTradeHistory=async()=>{
     setTradeHistoryLoading(true);
     try{
@@ -104,10 +112,12 @@ export default function Home(){
     loadSignals();
     loadTradeHistory();
     loadOpenPositions();
+    loadV9Status();
     const watchTimer=setInterval(loadWatch,60000);
     const scannerTimer=setInterval(loadScanner,60000);
     const positionTimer=setInterval(loadOpenPositions,60000);
-    return()=>{clearInterval(watchTimer);clearInterval(scannerTimer);clearInterval(positionTimer);};
+    const v9Timer=setInterval(loadV9Status,60000);
+    return()=>{clearInterval(watchTimer);clearInterval(scannerTimer);clearInterval(positionTimer);clearInterval(v9Timer);};
   },[]);
 
   useEffect(()=>{
@@ -297,6 +307,15 @@ export default function Home(){
       <div className="metricGrid"><Metric k="Teknik Skor" v={`${score.toFixed?.(1) ?? score}/10`}/><Metric k="Hacim Skoru" v={stock?.volume_analysis?.score==null?'—':`${Number(stock.volume_analysis.score).toFixed(1)}/10`}/><Metric k="RVOL" v={last?.rvol==null?'—':`${Number(last.rvol).toFixed(2)}x`}/><Metric k="MFI" v={fmt(last?.mfi)}/><Metric k="CMF" v={last?.cmf==null?'—':Number(last.cmf).toFixed(3)}/><Metric k="RSI" v={fmt(last?.rsi)}/><Metric k="ATR" v={fmt(last?.atr)}/><Metric k="Piyasa" v={stock?.market_regime?.state ?? '—'}/></div>
 
       <section className="panel scanner"><div className="sectionTitle"><div><h2>BIST 30 Fırsat Tarayıcı</h2><p>Teknik skoru yüksek hisseleri hızlıca görün.</p></div></div><div className="table"><div className="tr head"><span>Hisse</span><span>Fiyat</span><span>Değişim</span><span>Skor</span><span>RSI</span><span>Hacim</span><span>Destek</span><span>Direnç</span><span>Durum</span></div>{scan.map(x=><div className="tr" key={x.symbol} onClick={()=>{setSymbol(x.symbol);setMobileMenuOpen(false)}}><span><b>{x.symbol}</b></span><span>{x.price.toFixed(2)} ₺</span><span className={x.change_pct>=0?'green':'red'}>{x.change_pct>=0?'+':''}{x.change_pct.toFixed(2)}%</span><span>{x.score.toFixed(1)}</span><span>{x.rsi?.toFixed?.(1) ?? '—'}</span><span>{x.vol_ratio?.toFixed?.(2) ?? '—'}x</span><span>{x.support.toFixed(2)}</span><span>{x.resistance.toFixed(2)}</span><span>{x.state}</span></div>)}</div></section>
+
+      <section className="panel v9PaperBanner">
+        <div><b>V9 PAPER FORWARD TEST</b><span> Gerçek para emri yok — canlı sinyaller ve sonuçlar kaydediliyor.</span></div>
+        <div className="v9StatusRow">
+          <span>Piyasa: <b>{v9Status?.market_regime?.state ?? '—'}</b></span>
+          <span>Breadth: <b>{v9Status?.market_regime?.breadth_pct==null?'—':`%${v9Status.market_regime.breadth_pct}`}</b></span>
+          <span>Açık sinyal: <b>{v9Status?.open_positions ?? openPositions.length}</b></span>
+        </div>
+      </section>
 
       <section className="panel openSignals">
         <div className="signalHeader">
