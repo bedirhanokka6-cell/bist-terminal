@@ -75,3 +75,26 @@ class NotificationEvent(Base):
     title = Column(String(200), nullable=False)
     body = Column(Text, nullable=True)
     sent_at = Column(DateTime, default=datetime.utcnow, index=True, nullable=False)
+
+
+class OpenSignalPosition(Base):
+    __tablename__ = "open_signal_positions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    symbol = Column(String(16), index=True, nullable=False)
+    signal_type = Column(String(64), index=True, nullable=False)
+    entry_price = Column(Float, nullable=False)
+    stop_price = Column(Float, nullable=False)
+    target1_price = Column(Float, nullable=False)
+    target2_price = Column(Float, nullable=False)
+    risk_pct = Column(Float, nullable=False)
+    quality_score = Column(Float, nullable=True)
+    volume_score = Column(Float, nullable=True)
+    early_move_score = Column(Float, nullable=True)
+    status = Column(String(16), index=True, nullable=False, default="OPEN")
+    target1_hit = Column(Boolean, nullable=False, default=False)
+    last_price = Column(Float, nullable=True)
+    exit_price = Column(Float, nullable=True)
+    exit_reason = Column(String(32), nullable=True)
+    opened_at = Column(DateTime, default=datetime.utcnow, index=True, nullable=False)
+    closed_at = Column(DateTime, nullable=True)

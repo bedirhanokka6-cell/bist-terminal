@@ -32,6 +32,7 @@ export default function Home(){
   const [tradeHistory,setTradeHistory]=useState<any[]>([]);
   const [tradeHistoryLoading,setTradeHistoryLoading]=useState(false);
   const [v5,setV5]=useState<any>(null);
+  const [openPositions,setOpenPositions]=useState<any[]>([]);
   const [mobileMenuOpen,setMobileMenuOpen]=useState(false);
 
   const loadSignals=async()=>{
@@ -75,6 +76,16 @@ export default function Home(){
     }catch{}
   };
 
+  const loadOpenPositions=async()=>{
+    try{
+      const r=await fetch(`${API}/api/positions/open`,{cache:'no-store'});
+      if(r.ok){
+        const j=await r.json();
+        setOpenPositions(j?.items ?? []);
+      }
+    }catch{}
+  };
+
   const loadTradeHistory=async()=>{
     setTradeHistoryLoading(true);
     try{
@@ -92,9 +103,11 @@ export default function Home(){
     loadScanner();
     loadSignals();
     loadTradeHistory();
+    loadOpenPositions();
     const watchTimer=setInterval(loadWatch,60000);
     const scannerTimer=setInterval(loadScanner,60000);
-    return()=>{clearInterval(watchTimer);clearInterval(scannerTimer);};
+    const positionTimer=setInterval(loadOpenPositions,60000);
+    return()=>{clearInterval(watchTimer);clearInterval(scannerTimer);clearInterval(positionTimer);};
   },[]);
 
   useEffect(()=>{
@@ -284,6 +297,19 @@ export default function Home(){
       <div className="metricGrid"><Metric k="Teknik Skor" v={`${score.toFixed?.(1) ?? score}/10`}/><Metric k="Hacim Skoru" v={stock?.volume_analysis?.score==null?'—':`${Number(stock.volume_analysis.score).toFixed(1)}/10`}/><Metric k="RVOL" v={last?.rvol==null?'—':`${Number(last.rvol).toFixed(2)}x`}/><Metric k="MFI" v={fmt(last?.mfi)}/><Metric k="CMF" v={last?.cmf==null?'—':Number(last.cmf).toFixed(3)}/><Metric k="RSI" v={fmt(last?.rsi)}/><Metric k="ATR" v={fmt(last?.atr)}/><Metric k="Piyasa" v={stock?.market_regime?.state ?? '—'}/></div>
 
       <section className="panel scanner"><div className="sectionTitle"><div><h2>BIST 30 Fırsat Tarayıcı</h2><p>Teknik skoru yüksek hisseleri hızlıca görün.</p></div></div><div className="table"><div className="tr head"><span>Hisse</span><span>Fiyat</span><span>Değişim</span><span>Skor</span><span>RSI</span><span>Hacim</span><span>Destek</span><span>Direnç</span><span>Durum</span></div>{scan.map(x=><div className="tr" key={x.symbol} onClick={()=>{setSymbol(x.symbol);setMobileMenuOpen(false)}}><span><b>{x.symbol}</b></span><span>{x.price.toFixed(2)} ₺</span><span className={x.change_pct>=0?'green':'red'}>{x.change_pct>=0?'+':''}{x.change_pct.toFixed(2)}%</span><span>{x.score.toFixed(1)}</span><span>{x.rsi?.toFixed?.(1) ?? '—'}</span><span>{x.vol_ratio?.toFixed?.(2) ?? '—'}x</span><span>{x.support.toFixed(2)}</span><span>{x.resistance.toFixed(2)}</span><span>{x.state}</span></div>)}</div></section>
+
+      <section className="panel openSignals">
+        <div className="signalHeader">
+          <div><h2>Açık V6 Sinyalleri</h2><p>BREAKOUT / güçlü teyit sonrası stop ve hedefleri otomatik takip eder.</p></div>
+          <div className="signalActions"><button onClick={loadOpenPositions}>Yenile</button></div>
+        </div>
+        <div className="tradeTableWrap">
+          <div className="v6Tr head"><span>Hisse</span><span>Sinyal</span><span>Giriş</span><span>Stop</span><span>Hedef 1</span><span>Hedef 2</span><span>Son</span><span>H1</span></div>
+          {openPositions.length?openPositions.map((p:any)=><div className="v6Tr" key={p.id} onClick={()=>setSymbol(p.symbol)}>
+            <b>{p.symbol}</b><span>{p.signal_type}</span><span>{fmt(p.entry_price)} ₺</span><span className="red">{fmt(p.stop_price)} ₺</span><span>{fmt(p.target1_price)} ₺</span><span className="green">{fmt(p.target2_price)} ₺</span><span>{p.last_price==null?'—':`${fmt(p.last_price)} ₺`}</span><span>{p.target1_hit?'✓':'—'}</span>
+          </div>):<div className="emptySignals">Şu anda açık V6 sinyali yok.</div>}
+        </div>
+      </section>
 
       <section className="panel tradeHistory">
         <div className="signalHeader">

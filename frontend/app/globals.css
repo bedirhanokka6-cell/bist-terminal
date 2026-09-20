@@ -229,3 +229,19 @@ button,select{font:inherit}
 }
 .tradeTr.head{color:#7f98b2;font-size:9px}
 .tradeTr:hover{background:rgba(255,255,255,.025)}
+
+/* V6 open signal manager */
+.openSignals{margin-top:8px}
+.v6Tr{
+  display:grid;
+  grid-template-columns:70px 145px 85px 85px 85px 85px 85px 45px;
+  gap:8px;
+  min-width:760px;
+  padding:8px 5px;
+  border-bottom:1px solid rgba(255,255,255,.05);
+  font-size:10px;
+  align-items:center;
+  cursor:pointer;
+}
+.v6Tr.head{color:#7f98b2;font-size:9px}
+.v6Tr:hover{background:rgba(255,255,255,.025)}

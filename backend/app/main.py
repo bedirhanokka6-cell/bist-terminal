@@ -14,7 +14,7 @@ from .analysis import indicators, technical_state
 from .data import BIST30, load_chart
 from .news import company_news, kap_notifications
 from .db import get_db
-from .models import Signal, SignalResult, NotificationToken, NotificationEvent
+from .models import Signal, SignalResult, NotificationToken, NotificationEvent, OpenSignalPosition
 from .signal_service import create_signal_from_analysis, evaluate_signal, serialize_signal, serialize_result
 from .push_service import send_push
 
@@ -649,6 +649,117 @@ def _batch_alert_scan_data():
     )
 
 
+
+def _v6_trade_levels(a, entry_price: float):
+    """
+    Support/ATR based levels.
+    Risk is clamped between 1% and 7% to avoid unrealistically tight/wide stops.
+    """
+    try:
+        from .analysis_v5 import prepare_v5
+        x = prepare_v5(a)
+        l = x.iloc[-1]
+        atr = float(l['ATR']) if pd.notna(l.get('ATR')) else None
+        prior_low = float(l['PRIOR_LOW20_V4']) if pd.notna(l.get('PRIOR_LOW20_V4')) else None
+    except Exception:
+        atr = None
+        prior_low = None
+
+    if atr is None or atr <= 0:
+        risk_pct = 3.0
+    elif prior_low is None or prior_low >= entry_price:
+        risk_pct = (1.75 * atr / entry_price) * 100.0
+    else:
+        raw_stop = prior_low - 0.25 * atr
+        risk_pct = ((entry_price - raw_stop) / entry_price) * 100.0
+
+    risk_pct = min(max(float(risk_pct), 1.0), 7.0)
+    stop = entry_price * (1.0 - risk_pct / 100.0)
+    one_r = entry_price - stop
+    target1 = entry_price + one_r
+    target2 = entry_price + 2.0 * one_r
+
+    return {
+        'risk_pct': round(risk_pct, 2),
+        'stop_price': round(stop, 2),
+        'target1_price': round(target1, 2),
+        'target2_price': round(target2, 2),
+    }
+
+
+def _serialize_open_signal(x):
+    return {
+        'id': x.id,
+        'symbol': x.symbol,
+        'signal_type': x.signal_type,
+        'entry_price': x.entry_price,
+        'stop_price': x.stop_price,
+        'target1_price': x.target1_price,
+        'target2_price': x.target2_price,
+        'risk_pct': x.risk_pct,
+        'quality_score': x.quality_score,
+        'volume_score': x.volume_score,
+        'early_move_score': x.early_move_score,
+        'status': x.status,
+        'target1_hit': bool(x.target1_hit),
+        'last_price': x.last_price,
+        'exit_price': x.exit_price,
+        'exit_reason': x.exit_reason,
+        'opened_at': x.opened_at.isoformat() if x.opened_at else None,
+        'closed_at': x.closed_at.isoformat() if x.closed_at else None,
+    }
+
+
+def _v6_trading_days_open(symbol: str, opened_at) -> int:
+    try:
+        d = yf.download(
+            symbol + '.IS',
+            period='2mo',
+            interval='1d',
+            auto_adjust=False,
+            progress=False,
+            threads=False,
+        )
+        if d is None or len(d) == 0:
+            return 0
+        dates = pd.DatetimeIndex(d.index)
+        opened_date = pd.Timestamp(opened_at).date()
+        return int(sum(1 for x in dates if pd.Timestamp(x).date() > opened_date))
+    except Exception:
+        return 0
+
+
+@app.get('/api/positions/open')
+def v6_open_positions(db: Session = Depends(get_db)):
+    rows = (
+        db.query(OpenSignalPosition)
+        .filter(OpenSignalPosition.status == 'OPEN')
+        .order_by(OpenSignalPosition.opened_at.desc())
+        .all()
+    )
+    return {
+        'count': len(rows),
+        'items': [_serialize_open_signal(x) for x in rows],
+    }
+
+
+@app.get('/api/positions/history')
+def v6_position_history(
+    limit: int = Query(default=100, ge=1, le=500),
+    db: Session = Depends(get_db),
+):
+    rows = (
+        db.query(OpenSignalPosition)
+        .order_by(OpenSignalPosition.opened_at.desc())
+        .limit(limit)
+        .all()
+    )
+    return {
+        'count': len(rows),
+        'items': [_serialize_open_signal(x) for x in rows],
+    }
+
+
 @app.post('/api/alerts/scan')
 def scan_and_notify(
     x_alert_key: str | None = Header(default=None, alias='x-alert-key'),
@@ -683,6 +794,112 @@ def scan_and_notify(
         raise HTTPException(503, f'Piyasa verisi alınamadı: {exc}')
 
     fired = []
+
+    # ------------------------------------------------------
+    # V6: önce mevcut açık teknik sinyalleri yönet.
+    # STOP / Hedef 1 / Hedef 2 / 10 işlem günü çıkışı.
+    # ------------------------------------------------------
+    open_positions = (
+        db.query(OpenSignalPosition)
+        .filter(OpenSignalPosition.status == 'OPEN')
+        .all()
+    )
+
+    for pos in open_positions:
+        ticker = pos.symbol + '.IS'
+        try:
+            if isinstance(data.columns, pd.MultiIndex):
+                if ticker not in data.columns.get_level_values(0):
+                    continue
+                od = data[ticker].dropna(how='all').copy()
+            else:
+                od = data.dropna(how='all').copy()
+
+            if od is None or len(od) == 0:
+                continue
+
+            current_price = float(pd.to_numeric(od['Close'], errors='coerce').dropna().iloc[-1])
+            pos.last_price = current_price
+
+            rule_key = None
+            title = None
+            body = None
+            close_now = False
+
+            if current_price <= float(pos.stop_price):
+                rule_key = f'v6_stop_{pos.id}'
+                title = f'{pos.symbol} — STOP / ÇIKIŞ UYARISI'
+                body = (
+                    f'Fiyat {current_price:.2f} ₺ • Stop {pos.stop_price:.2f} ₺ kırıldı '
+                    f'• Giriş {pos.entry_price:.2f} ₺'
+                )
+                pos.exit_price = current_price
+                pos.exit_reason = 'STOP'
+                close_now = True
+
+            elif current_price >= float(pos.target2_price):
+                rule_key = f'v6_target2_{pos.id}'
+                title = f'{pos.symbol} — HEDEF 2 UYARISI'
+                body = (
+                    f'Fiyat {current_price:.2f} ₺ • Hedef 2 {pos.target2_price:.2f} ₺ görüldü '
+                    f'• Giriş {pos.entry_price:.2f} ₺'
+                )
+                pos.exit_price = current_price
+                pos.exit_reason = 'TARGET2'
+                close_now = True
+
+            elif (not pos.target1_hit) and current_price >= float(pos.target1_price):
+                rule_key = f'v6_target1_{pos.id}'
+                title = f'{pos.symbol} — HEDEF 1 UYARISI'
+                body = (
+                    f'Fiyat {current_price:.2f} ₺ • Hedef 1 {pos.target1_price:.2f} ₺ görüldü '
+                    f'• Hedef 2 {pos.target2_price:.2f} ₺'
+                )
+                pos.target1_hit = True
+
+            else:
+                trading_days = _v6_trading_days_open(pos.symbol, pos.opened_at)
+                if trading_days >= 10:
+                    rule_key = f'v6_time_{pos.id}'
+                    title = f'{pos.symbol} — 10 GÜN / ÇIKIŞ DEĞERLENDİRMESİ'
+                    body = (
+                        f'10 işlem günü doldu • Güncel {current_price:.2f} ₺ '
+                        f'• Giriş {pos.entry_price:.2f} ₺'
+                    )
+                    pos.exit_price = current_price
+                    pos.exit_reason = 'TIME'
+                    close_now = True
+
+            if rule_key:
+                result = send_push(
+                    tokens=tokens,
+                    title=title,
+                    body=body,
+                    data={'symbol': pos.symbol, 'rule': rule_key, 'position_id': str(pos.id)},
+                )
+                if result.get('success_count', 0) > 0:
+                    _record_alert(db, pos.symbol, rule_key, title, body)
+                    fired.append({
+                        'symbol': pos.symbol,
+                        'rule': rule_key,
+                        'title': title,
+                        'success_count': result.get('success_count', 0),
+                    })
+
+            if close_now:
+                pos.status = 'CLOSED'
+                pos.closed_at = datetime.utcnow()
+
+            db.add(pos)
+            db.commit()
+
+        except Exception:
+            db.rollback()
+            continue
+
+    # ------------------------------------------------------
+    # Sonra yeni BIST30 fırsatlarını tara.
+    # ------------------------------------------------------
     for symbol in BIST30:
         ticker = symbol + '.IS'
         try:
@@ -783,6 +1000,76 @@ def scan_and_notify(
                     ))
             except Exception:
                 pass
+
+            # V6: BREAKOUT ve GUCLU_TEKNIK_TEYIT için tek açık sinyal pozisyonu oluştur.
+            # ERKEN_TREND yalnızca İZLE olarak kalır.
+            try:
+                from .analysis_v5 import latest_v5
+                v6 = latest_v5(d, market_positive=True)
+                v6_sig = v6.get('signal')
+
+                if v6_sig in {'BREAKOUT', 'GUCLU_TEKNIK_TEYIT'}:
+                    existing = (
+                        db.query(OpenSignalPosition)
+                        .filter(
+                            OpenSignalPosition.symbol == symbol,
+                            OpenSignalPosition.status == 'OPEN',
+                        )
+                        .first()
+                    )
+
+                    if existing is None:
+                        levels = _v6_trade_levels(d, price)
+                        new_pos = OpenSignalPosition(
+                            symbol=symbol,
+                            signal_type=v6_sig,
+                            entry_price=price,
+                            stop_price=levels['stop_price'],
+                            target1_price=levels['target1_price'],
+                            target2_price=levels['target2_price'],
+                            risk_pct=levels['risk_pct'],
+                            quality_score=v6.get('quality_score'),
+                            volume_score=v6.get('volume_score'),
+                            early_move_score=v6.get('early_move_score'),
+                            status='OPEN',
+                            target1_hit=False,
+                            last_price=price,
+                        )
+                        db.add(new_pos)
+                        db.commit()
+                        db.refresh(new_pos)
+
+                        label = 'BREAKOUT' if v6_sig == 'BREAKOUT' else 'GÜÇLÜ TEKNİK TEYİT'
+                        entry_title = f'{symbol} — {label}'
+                        entry_body = (
+                            f'Fiyat {price:.2f} ₺ • Stop {levels["stop_price"]:.2f} ₺ '
+                            f'• Hedef 1 {levels["target1_price"]:.2f} ₺ '
+                            f'• Hedef 2 {levels["target2_price"]:.2f} ₺ '
+                            f'• Teknik {v6.get("quality_score") or 0:.1f}/10 '
+                            f'• Hacim {v6.get("volume_score") or 0:.1f}/10'
+                        )
+
+                        push_result = send_push(
+                            tokens=tokens,
+                            title=entry_title,
+                            body=entry_body,
+                            data={
+                                'symbol': symbol,
+                                'rule': 'v6_entry',
+                                'position_id': str(new_pos.id),
+                                'signal_type': v6_sig,
+                            },
+                        )
+                        if push_result.get('success_count', 0) > 0:
+                            _record_alert(db, symbol, f'v6_entry_{new_pos.id}', entry_title, entry_body)
+                            fired.append({
+                                'symbol': symbol,
+                                'rule': 'v6_entry',
+                                'title': entry_title,
+                                'success_count': push_result.get('success_count', 0),
+                            })
+            except Exception:
+                db.rollback()
 
             for rule_key, title, body in rules:
                 cooldown_minutes = 360 if rule_key.startswith('v5_') else 60
@@ -2388,4 +2675,28 @@ def backtest_v5_signals(
             'Erken sinyal daha fazla fırsat yakalayabilir ama yanlış sinyal sayısı da artabilir.',
             'Backtest geçmiş performanstır; geleceği garanti etmez.',
         ],
+    }
+
+
+@app.get('/api/v6/status')
+def v6_status(db: Session = Depends(get_db)):
+    open_count = (
+        db.query(OpenSignalPosition)
+        .filter(OpenSignalPosition.status == 'OPEN')
+        .count()
+    )
+    closed_count = (
+        db.query(OpenSignalPosition)
+        .filter(OpenSignalPosition.status == 'CLOSED')
+        .count()
+    )
+    return {
+        'ok': True,
+        'model': 'v6_alert_position_manager',
+        'open_positions': open_count,
+        'closed_positions': closed_count,
+        'entry_signals': ['BREAKOUT', 'GUCLU_TEKNIK_TEYIT'],
+        'watch_only': ['ERKEN_TREND', 'KIRILIM_YAKIN', 'TREND_DEVAM'],
+        'exit_rules': ['STOP', 'TARGET1_ALERT', 'TARGET2_CLOSE', '10_TRADING_DAYS'],
+        'note': 'Teknik uyarı sistemidir; otomatik gerçek para işlemi yapmaz.',
     }
