@@ -258,3 +258,31 @@ button,select{font:inherit}
 .performanceBanner>div{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 .performanceBanner b{font-size:12px}
 .performanceBanner span{font-size:10px;opacity:.7}
+
+/* SIDEBAR RESTORE — desktopta eski BIST30 panelini kesin görünür tut */
+@media (min-width:721px){
+  .appShell{
+    display:grid !important;
+    grid-template-columns:250px minmax(0,1fr) !important;
+    min-height:100vh;
+  }
+  .sidebar{
+    display:block !important;
+    visibility:visible !important;
+    opacity:1 !important;
+    position:sticky !important;
+    top:0;
+    height:100vh;
+    width:250px;
+    transform:none !important;
+    background:#071522;
+    border-right:1px solid #173149;
+    overflow:hidden;
+    z-index:20;
+  }
+  .watchList{
+    display:block !important;
+    height:calc(100vh - 145px);
+    overflow-y:auto;
+  }
+}
