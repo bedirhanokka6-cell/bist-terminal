@@ -5,6 +5,7 @@ import numpy as np
 import pandas as pd
 import yfinance as yf
 import os
+import time as pytime
 from urllib.request import Request, urlopen
 from datetime import datetime, time
 from zoneinfo import ZoneInfo
@@ -35,6 +36,33 @@ app.add_middleware(
     allow_methods=['*'],
     allow_headers=['*'],
 )
+
+
+
+# ==========================================================
+# V16 FINAL PERFORMANCE CACHE
+# ==========================================================
+_RUNTIME_CACHE = {}
+
+def _cache_get(key: str, ttl_seconds: int):
+    item = _RUNTIME_CACHE.get(key)
+    if not item:
+        return None
+    ts, value = item
+    if pytime.time() - ts > ttl_seconds:
+        _RUNTIME_CACHE.pop(key, None)
+        return None
+    return value
+
+def _cache_set(key: str, value):
+    _RUNTIME_CACHE[key] = (pytime.time(), value)
+    # Basit bellek koruması
+    if len(_RUNTIME_CACHE) > 100:
+        oldest = sorted(_RUNTIME_CACHE.items(), key=lambda kv: kv[1][0])[:20]
+        for k, _ in oldest:
+            _RUNTIME_CACHE.pop(k, None)
+    return value
+
 
 def clean_num(v):
     if v is None or (isinstance(v, float) and (np.isnan(v) or np.isinf(v))):
@@ -161,6 +189,9 @@ def health():
 
 @app.get('/api/bist30')
 def bist30():
+    cached = _cache_get('bist30', 45)
+    if cached is not None:
+        return cached
     # 30 hisseyi tek tek indirmek yerine tek toplu istekte al.
     # Bu, özellikle Render üzerinde sol BIST30 listesinin çok daha hızlı dolmasını sağlar.
     tickers = [s + '.IS' for s in BIST30]
@@ -230,7 +261,7 @@ def bist30():
     # Her zaman BIST30 sırasını koru.
     order = {s: i for i, s in enumerate(BIST30)}
     rows.sort(key=lambda x: order.get(x['symbol'], 999))
-    return rows
+    return _cache_set('bist30', rows)
 
 @app.get('/api/stock/{symbol}')
 def stock(symbol: str, period: str = '1A'):
@@ -397,6 +428,10 @@ def scanner(min_score: float = 0):
 
 @app.get('/api/news/{symbol}')
 def news(symbol: str, limit: int = Query(default=20, ge=5, le=50)):
+    cache_key = f'news:{symbol.upper()}:{limit}'
+    cached = _cache_get(cache_key, 300)
+    if cached is not None:
+        return cached
     symbol = symbol.upper().replace('.IS', '')
     if symbol not in BIST30:
         raise HTTPException(404, 'BIST30 içinde hisse bulunamadı')
@@ -410,7 +445,7 @@ def news(symbol: str, limit: int = Query(default=20, ge=5, le=50)):
         reverse=True,
     )
 
-    return {
+    response = {
         'symbol': symbol,
         'company': COMPANY_NAMES.get(symbol, symbol) if 'COMPANY_NAMES' in globals() else symbol,
         'news': news_rows,
@@ -424,6 +459,7 @@ def news(symbol: str, limit: int = Query(default=20, ge=5, le=50)):
         'source_note': 'Haberler ücretsiz RSS kaynaklarından derlenir. KAP bölümü kap.org.tr alanına indekslenen sonuçları gösterir; resmi KAP ekranı esas kaynaktır.',
         'official_kap_url': 'https://www.kap.org.tr/tr/bildirim-sorgu',
     }
+    return _cache_set(cache_key, response)
 
 
 
@@ -982,6 +1018,9 @@ def _v9_trade_levels(a, entry_price: float):
 
 @app.get('/api/v9/live-status')
 def v9_live_status(db: Session = Depends(get_db)):
+    cached = _cache_get('v9_live_status', 300)
+    if cached is not None:
+        return cached
     open_count = (
         db.query(OpenSignalPosition)
         .filter(OpenSignalPosition.status == 'OPEN')
@@ -1382,13 +1421,14 @@ def scan_and_notify(
         except Exception:
             continue
 
-    return {
+    response = {
         'ok': True,
         'skipped': False,
         'market_status': market['market_status'],
         'alerts_sent': len(fired),
         'alerts': fired,
     }
+    return _cache_set('v9_live_status', response)
 
 
 # ==========================================================
@@ -4202,3 +4242,20 @@ def backtest_v9_forward(
         ],
     }
 
+
+
+@app.get('/api/performance/status')
+def performance_status():
+    return {
+        'ok': True,
+        'version': 'V16_FINAL_PERFORMANCE',
+        'cache_items': len(_RUNTIME_CACHE),
+        'optimizations': [
+            'BIST30 45sn cache',
+            'Haberler 5dk cache',
+            'V9 piyasa rejimi 5dk cache',
+            'Haber görselleri arkaplanda',
+            'Geçmiş backtest ilk açılışta yüklenmez',
+            'Tarayıcı yenileme aralıkları azaltıldı',
+        ]
+    }

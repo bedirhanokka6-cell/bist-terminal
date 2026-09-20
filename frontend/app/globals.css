@@ -478,3 +478,17 @@ button,select{font:inherit}
     min-width:290px !important;
   }
 }
+
+/* V16 Final Performance */
+.perfBadge{
+  font-size:9px;
+  color:#75e7c1;
+  background:#0b352f;
+  border:1px solid #17594d;
+  border-radius:5px;
+  padding:5px 7px;
+  white-space:nowrap;
+}
+.newsThumb img{
+  content-visibility:auto;
+}

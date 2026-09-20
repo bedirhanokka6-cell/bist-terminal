@@ -32,6 +32,7 @@ export default function Home(){
   const [pushToken,setPushToken]=useState('');
   const [tradeHistory,setTradeHistory]=useState<any[]>([]);
   const [tradeHistoryLoading,setTradeHistoryLoading]=useState(false);
+  const [historyLoaded,setHistoryLoaded]=useState(false);
   const [v5,setV5]=useState<any>(null);
   const [openPositions,setOpenPositions]=useState<any[]>([]);
   const [v9Status,setV9Status]=useState<any>(null);
@@ -108,12 +109,12 @@ export default function Home(){
     if(showLoading)setNewsLoading(true);
     setNewsError('');
     try{
-      const r=await fetch(`${API}/api/news/${symbol}?limit=25`,{cache:'no-store'});
+      const r=await fetch(`${API}/api/news/${symbol}?limit=25`,{cache:'default'});
       const j=await r.json();
       if(!r.ok)throw new Error(j?.detail||'Haberler alınamadı');
       const items=j?.all ?? [];
       setNewsItems(items);
-      setTimeout(()=>resolveNewsImages(items),50);
+      setTimeout(()=>resolveNewsImages(items),500);
       setNewsNote(j?.source_note ?? '');
       setNewsCounts(j?.counts ?? {all:0,news:0,kap:0});
     }catch(e:any){
@@ -124,25 +125,30 @@ export default function Home(){
   };
 
   const resolveNewsImages=async(items:NewsItem[])=>{
-    const subset=(items||[]).slice(0,16);
-    subset.forEach(async(n)=>{
-      if(!n?.url || newsImages[n.url])return;
+    const subset=(items||[]).slice(0,6);
+    for(let i=0;i<subset.length;i++){
+      const n=subset[i];
+      if(!n?.url || newsImages[n.url])continue;
       try{
         const r=await fetch(`${API}/api/news/image-meta?url=${encodeURIComponent(n.url)}`,{cache:'force-cache'});
-        if(!r.ok)return;
-        const j=await r.json();
-        if(j?.image_url)setNewsImages(prev=>({...prev,[n.url]:j.image_url}));
+        if(r.ok){
+          const j=await r.json();
+          if(j?.image_url)setNewsImages(prev=>({...prev,[n.url]:j.image_url}));
+        }
       }catch{}
-    });
+      await new Promise(res=>setTimeout(res,180));
+    }
   };
 
   const loadTradeHistory=async()=>{
+    if(tradeHistoryLoading)return;
     setTradeHistoryLoading(true);
     try{
       const r=await fetch(`${API}/api/backtest/v4-trades?limit=40`,{cache:'no-store'});
       if(r.ok){
         const j=await r.json();
         setTradeHistory(j?.trades ?? []);
+        setHistoryLoaded(true);
       }
     }catch{}
     finally{setTradeHistoryLoading(false);}
@@ -152,13 +158,12 @@ export default function Home(){
     loadWatch();
     loadScanner();
     loadSignals();
-    loadTradeHistory();
     loadOpenPositions();
     loadV9Status();
     const watchTimer=setInterval(loadWatch,60000);
-    const scannerTimer=setInterval(loadScanner,60000);
+    const scannerTimer=setInterval(loadScanner,180000);
     const positionTimer=setInterval(loadOpenPositions,60000);
-    const v9Timer=setInterval(loadV9Status,60000);
+    const v9Timer=setInterval(loadV9Status,300000);
     return()=>{clearInterval(watchTimer);clearInterval(scannerTimer);clearInterval(positionTimer);clearInterval(v9Timer);};
   },[]);
 
@@ -170,7 +175,7 @@ export default function Home(){
         loadStock(false);
         loadV5();
       }
-    },15000);
+    },30000);
     return()=>clearInterval(stockTimer);
   },[symbol,period]);
 
@@ -315,7 +320,7 @@ export default function Home(){
           </button>
           {pushToken?<button onClick={copyPushToken} style={{padding:'7px 10px',borderRadius:'7px',border:'1px solid #24445f',background:'#0e2435',color:'#b8c7d4',cursor:'pointer'}}>Tokeni Kopyala</button>:null}
           <span style={{fontSize:'11px',color:pushStatus==='Bildirim açık'?'#32d296':'#9aa4b2'}}>{pushStatus}</span>
-          <div className="market">● Piyasa Takip</div>
+          <span className="perfBadge">⚡ V16 HIZLI</span><div className="market">● Piyasa Takip</div>
         </div></header>
 
       {activeView==='news'?<section className="newsPage">
@@ -402,7 +407,7 @@ export default function Home(){
             <span>•</span>
             <span>{dataAge==null?'Gecikme: —':`Gecikme: ${Number(dataAge).toFixed(1)} dk`}</span>
             <span>•</span>
-            <b style={{color:dataStatusColor}}>{dataStatus}</b><span>•</span><span>Otomatik yenileme: 15 sn</span>
+            <b style={{color:dataStatusColor}}>{dataStatus}</b><span>•</span><span>Otomatik yenileme: 30 sn</span>
           </div>
         </div>
       </section>
@@ -440,7 +445,7 @@ export default function Home(){
 
       <section className="panel openSignals">
         <div className="signalHeader">
-          <div><h2>Açık V6 Sinyalleri</h2><p>BREAKOUT / güçlü teyit sonrası stop ve hedefleri otomatik takip eder.</p></div>
+          <div><h2>Açık V9 Paper Sinyalleri</h2><p>Canlı paper sinyallerinin giriş, stop ve hedeflerini takip eder.</p></div>
           <div className="signalActions"><button onClick={loadOpenPositions}>Yenile</button></div>
         </div>
         <div className="tradeTableWrap">
@@ -454,13 +459,13 @@ export default function Home(){
       <section className="panel tradeHistory">
         <div className="signalHeader">
           <div><h2>Geçmiş V4 İşlemleri</h2><p>V4'ün geçmişte verdiği AL adayları ve stop/hedef/zaman çıkışları.</p></div>
-          <div className="signalActions"><button onClick={loadTradeHistory} disabled={tradeHistoryLoading}>{tradeHistoryLoading?'Yükleniyor...':'Yenile'}</button></div>
+          <div className="signalActions"><button onClick={loadTradeHistory} disabled={tradeHistoryLoading}>{tradeHistoryLoading?'Yükleniyor...':historyLoaded?'Yenile':'Geçmişi Yükle'}</button></div>
         </div>
         <div className="tradeTableWrap">
           <div className="tradeTr head"><span>Hisse</span><span>AL tarihi</span><span>Giriş</span><span>Çıkış tarihi</span><span>Çıkış</span><span>Neden</span><span>Getiri</span><span>Skor</span><span>Hacim</span></div>
           {tradeHistory.length?tradeHistory.map((t:any,i:number)=><div className="tradeTr" key={`${t.symbol}-${t.entry_date}-${i}`} onClick={()=>setSymbol(t.symbol)}>
             <b>{t.symbol}</b><span>{t.entry_date}</span><span>{fmt(t.entry_price)} ₺</span><span>{t.exit_date}</span><span>{fmt(t.exit_price)} ₺</span><span>{t.exit_reason==='TARGET'?'HEDEF':t.exit_reason==='STOP'?'STOP':'ZAMAN'}</span><b className={Number(t.net_return_pct)>=0?'green':'red'}>{Number(t.net_return_pct)>=0?'+':''}{Number(t.net_return_pct).toFixed(2)}%</b><span>{Number(t.quality_score).toFixed(2)}</span><span>{Number(t.volume_score).toFixed(2)}</span>
-          </div>):<div className="emptySignals">{tradeHistoryLoading?'Geçmiş işlemler hesaplanıyor...':'Geçmiş işlem bulunamadı.'}</div>}
+          </div>):<div className="emptySignals">{tradeHistoryLoading?'Geçmiş işlemler hesaplanıyor...':historyLoaded?'Geçmiş işlem bulunamadı.':'Performans için geçmiş işlemler otomatik yüklenmiyor. İstersen “Geçmişi Yükle”ye bas.'}</div>}
         </div>
       </section>
 
