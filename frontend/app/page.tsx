@@ -14,6 +14,33 @@ const periods=['1G','5G','1A','3A','6A','1Y','2Y'];
 const analyses=['RSI','MACD','Hacim','RVOL','OBV','MFI','CMF','Bollinger','EMA'];
 const horizons=[1,3,5,10];
 
+
+function simplifyCandles(candles:any[], period:string){
+  if(!Array.isArray(candles) || candles.length===0)return [];
+  // 1G grafiğinde yaklaşık 5 dakikalık çok fazla mum gelirse
+  // 3 mumu tek mumda birleştirerek yaklaşık 15 dakikalık görünüm oluştur.
+  const groupSize = period==='1G' ? 3 : 1;
+  if(groupSize===1 || candles.length<45)return candles;
+
+  const out:any[]=[];
+  for(let i=0;i<candles.length;i+=groupSize){
+    const group=candles.slice(i,i+groupSize);
+    if(!group.length)continue;
+    const first=group[0];
+    const last=group[group.length-1];
+    out.push({
+      ...last,
+      time:first.time,
+      open:first.open,
+      high:Math.max(...group.map((x:any)=>Number(x.high)).filter(Number.isFinite)),
+      low:Math.min(...group.map((x:any)=>Number(x.low)).filter(Number.isFinite)),
+      close:last.close,
+      volume:group.reduce((sum:number,x:any)=>sum+(Number(x.volume)||0),0),
+    });
+  }
+  return out;
+}
+
 export default function Home(){
   const [watch,setWatch]=useState<Stock[]>([]);
   const [scan,setScan]=useState<Scanner[]>([]);
@@ -248,6 +275,7 @@ export default function Home(){
   const state=stock?.technical?.state ?? '—';
   const stateColor=stock?.technical?.color || '#f8bd39';
   const selectedWatch=useMemo(()=>watch.find(x=>x.symbol===symbol),[watch,symbol]);
+  const displayCandles=useMemo(()=>simplifyCandles(stock?.candles ?? [],period),[stock?.candles,period]);
 
   const dataStatus=stock?.data_status ?? '—';
   const dataAge=stock?.data_age_minutes;
@@ -297,9 +325,9 @@ export default function Home(){
 
       <div className="workspace">
         <div className="charts">
-          <div className="panel chartPanel"><div className="chartTitle"><b>{symbol}.IS • {period}</b><span>{loading?'Veri güncelleniyor...':`${stock?.candles?.length ?? 0} mum`}</span></div>{stock?.candles?.length?<PriceChart candles={stock.candles}/>:<div className="loading">Grafik verisi bekleniyor...</div>}</div>
+          <div className="panel chartPanel"><div className="chartTitle"><b>{symbol}.IS • {period}</b><span>{loading?'Veri güncelleniyor...':`${displayCandles.length} mum${period==='1G' && (stock?.candles?.length ?? 0)>displayCandles.length ? ' • sadeleştirilmiş' : ''}`}</span></div>{displayCandles.length?<PriceChart candles={displayCandles}/>:<div className="loading">Grafik verisi bekleniyor...</div>}</div>
           <div className="analysisTabs">{analyses.map(a=><button key={a} className={analysis===a?'active':''} onClick={()=>setAnalysis(a)}>{a}</button>)}</div>
-          <div className="panel analysisPanel">{stock?.candles?.length?<AnalysisChart candles={stock.candles} mode={analysis}/>:null}</div>
+          <div className="panel analysisPanel">{displayCandles.length?<AnalysisChart candles={displayCandles} mode={analysis}/>:null}</div>
         </div>
 
         <aside className="rightRail">

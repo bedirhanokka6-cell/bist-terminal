@@ -286,3 +286,62 @@ button,select{font:inherit}
     overflow-y:auto;
   }
 }
+
+
+/* V13 — masaüstünde sol BIST30 panelini kesin olarak geri getir */
+@media (min-width:721px){
+  .appShell{
+    display:block !important;
+    min-height:100vh !important;
+  }
+
+  .sidebar{
+    display:block !important;
+    visibility:visible !important;
+    opacity:1 !important;
+    position:fixed !important;
+    left:0 !important;
+    top:0 !important;
+    bottom:0 !important;
+    width:250px !important;
+    height:100vh !important;
+    transform:none !important;
+    padding:14px 10px !important;
+    background:#071522 !important;
+    border-right:1px solid #173149 !important;
+    overflow:hidden !important;
+    z-index:999 !important;
+  }
+
+  .mainArea{
+    width:auto !important;
+    min-width:0 !important;
+    margin-left:250px !important;
+    padding-left:12px !important;
+  }
+
+  .watchHead,
+  .watchRow{
+    grid-template-columns:minmax(82px,1fr) 68px 72px !important;
+  }
+
+  .watchList{
+    display:block !important;
+    visibility:visible !important;
+    height:calc(100vh - 145px) !important;
+    overflow-y:auto !important;
+    overflow-x:hidden !important;
+  }
+
+  .watchRow{
+    display:grid !important;
+  }
+}
+
+/* Daha temiz ana grafik */
+.chartPanel{
+  overflow:hidden;
+}
+.chartBox{
+  min-height:390px;
+}
