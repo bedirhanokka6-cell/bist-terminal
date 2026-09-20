@@ -757,8 +757,36 @@ def scan_and_notify(
                     f'MACD yukarı kesişim oluştu • Fiyat {price:.2f} ₺'
                 ))
 
+            # V5 genel erken trend / breakout uyarıları.
+            try:
+                from .analysis_v5 import latest_v5
+                v5 = latest_v5(d, market_positive=True)
+                sig = v5.get('signal')
+
+                if sig == 'ERKEN_TREND':
+                    rules.append((
+                        'v5_early_trend',
+                        f'{symbol} erken trend uyarısı',
+                        f'Yeni pozitif trend yapısı • Fiyat {price:.2f} ₺ • RVOL {v5.get("rvol") or 0:.2f}x • Skor {v5.get("early_move_score") or 0:.1f}/10'
+                    ))
+                elif sig == 'BREAKOUT':
+                    rules.append((
+                        'v5_breakout',
+                        f'{symbol} hacimli kırılım',
+                        f'20 dönem direnç kırılımı • Fiyat {price:.2f} ₺ • RVOL {v5.get("rvol") or 0:.2f}x • Hacim skoru {v5.get("volume_score") or 0:.1f}/10'
+                    ))
+                elif sig == 'KIRILIM_YAKIN':
+                    rules.append((
+                        'v5_near_breakout',
+                        f'{symbol} kırılıma yaklaşıyor',
+                        f'Kısa vadeli dirence yakın • Fiyat {price:.2f} ₺ • Mesafe %{v5.get("distance_to_high_pct") or 0:.2f}'
+                    ))
+            except Exception:
+                pass
+
             for rule_key, title, body in rules:
-                if _cooldown_exists(db, symbol, rule_key, minutes=60):
+                cooldown_minutes = 360 if rule_key.startswith('v5_') else 60
+                if _cooldown_exists(db, symbol, rule_key, minutes=cooldown_minutes):
                     continue
 
                 result = send_push(
@@ -2058,4 +2086,306 @@ def backtest_v4_trades(
             'exit_rules': 'destek altı stop + 2R hedef + maksimum bekleme',
         },
         'trades': trades[:limit],
+    }
+
+
+# ==========================================================
+# V5 GENEL ERKEN TREND + BREAKOUT SINYAL MOTORU
+# ==========================================================
+
+@app.get('/api/analysis/v5/{symbol}')
+def analysis_v5_live(symbol: str):
+    from .analysis_v4 import market_regime_from_index
+    from .analysis_v5 import latest_v5
+
+    symbol = symbol.upper().replace('.IS', '')
+    if symbol not in BIST30:
+        raise HTTPException(404, 'BIST30 içinde hisse bulunamadı')
+
+    d = load_chart(symbol, '1Y')
+    if d is None or len(d) < 80:
+        raise HTTPException(503, 'V5 analiz için yeterli veri yok')
+
+    market = {
+        'state': 'BİLİNMİYOR',
+        'score': 0,
+        'positive': False,
+        'reason': 'Endeks verisi alınamadı',
+    }
+    try:
+        idx = yf.download(
+            'XU100.IS',
+            period='1y',
+            interval='1d',
+            auto_adjust=False,
+            progress=False,
+            threads=False,
+        )
+        if idx is None or len(idx) < 60:
+            idx = yf.download(
+                'XU030.IS',
+                period='1y',
+                interval='1d',
+                auto_adjust=False,
+                progress=False,
+                threads=False,
+            )
+        if isinstance(idx.columns, pd.MultiIndex):
+            idx.columns = idx.columns.get_level_values(0)
+        market = market_regime_from_index(idx)
+    except Exception:
+        pass
+
+    v5 = latest_v5(d, market_positive=market.get('positive'))
+    return {
+        'symbol': symbol,
+        'model': 'v5_early_trend_breakout',
+        'v5': v5,
+        'market_regime': market,
+        'signal_meanings': {
+            'ERKEN_TREND': 'Trend yeni güçlenmeye başlıyor; erken uyarıdır.',
+            'KIRILIM_YAKIN': 'Fiyat önemli kısa vadeli dirence yaklaşmıştır.',
+            'BREAKOUT': '20 dönem zirvesi hacim/para akışı teyidiyle kırılmıştır.',
+            'GUCLU_TEKNIK_TEYIT': 'V4 kalite + hacim + piyasa rejimi birlikte olumludur.',
+            'TREND_DEVAM': 'Erken trend şartları devam etmektedir.',
+            'IZLE': 'V5 için yeni güçlü olay oluşmamıştır.',
+        },
+        'note': 'Bunlar teknik analiz uyarılarıdır; otomatik işlem emri veya garanti değildir.',
+    }
+
+
+@app.get('/api/scanner/v5')
+def scanner_v5():
+    from .analysis_v4 import market_regime_from_index
+    from .analysis_v5 import latest_v5
+
+    market = {'positive': False, 'state': 'BİLİNMİYOR'}
+    try:
+        idx = yf.download('XU100.IS', period='1y', interval='1d', auto_adjust=False, progress=False, threads=False)
+        if idx is None or len(idx) < 60:
+            idx = yf.download('XU030.IS', period='1y', interval='1d', auto_adjust=False, progress=False, threads=False)
+        if isinstance(idx.columns, pd.MultiIndex):
+            idx.columns = idx.columns.get_level_values(0)
+        market = market_regime_from_index(idx)
+    except Exception:
+        pass
+
+    rows = []
+    rank = {
+        'GUCLU_TEKNIK_TEYIT': 5,
+        'BREAKOUT': 4,
+        'ERKEN_TREND': 3,
+        'KIRILIM_YAKIN': 2,
+        'TREND_DEVAM': 1,
+        'IZLE': 0,
+    }
+
+    for s in BIST30:
+        try:
+            d = load_chart(s, '1Y')
+            if d is None or len(d) < 80:
+                continue
+            v5 = latest_v5(d, market_positive=market.get('positive'))
+            if v5['signal'] == 'IZLE':
+                continue
+            rows.append({
+                'symbol': s,
+                **v5,
+            })
+        except Exception:
+            continue
+
+    rows.sort(
+        key=lambda x: (
+            rank.get(x.get('signal'), 0),
+            x.get('early_move_score', 0),
+            x.get('quality_score', 0),
+        ),
+        reverse=True,
+    )
+
+    return {
+        'market_regime': market,
+        'count': len(rows),
+        'signals': rows,
+    }
+
+
+@app.get('/api/backtest/v5-signals')
+def backtest_v5_signals(
+    test_days: int = Query(default=504, ge=252, le=756),
+    cost_bps: int = Query(default=20, ge=0, le=100),
+    cooldown_days: int = Query(default=5, ge=1, le=20),
+):
+    """
+    V5 sinyal tiplerini ayrı ayrı test eder:
+    - early_trend
+    - breakout
+    - strong_confirmation + market
+
+    5 ve 10 işlem günü sonrası getirileri ölçer.
+    """
+    from .analysis_v5 import prepare_v5
+
+    tickers = [s + '.IS' for s in BIST30]
+    horizons = [5, 10]
+    cost_pct = cost_bps / 100.0
+
+    try:
+        raw = yf.download(
+            tickers=tickers,
+            period='5y',
+            interval='1d',
+            auto_adjust=False,
+            progress=False,
+            threads=True,
+            group_by='ticker',
+        )
+    except Exception as exc:
+        raise HTTPException(503, f'V5 backtest verisi alınamadı: {exc}')
+
+    prepared = {}
+    close_map = {}
+
+    for symbol in BIST30:
+        ticker = symbol + '.IS'
+        try:
+            if isinstance(raw.columns, pd.MultiIndex):
+                if ticker not in raw.columns.get_level_values(0):
+                    continue
+                d = raw[ticker].copy()
+            else:
+                d = raw.copy()
+            d = d.dropna(subset=['Open','High','Low','Close'])
+            if len(d) < 300:
+                continue
+            a = prepare_v5(d)
+            prepared[symbol] = a
+            close_map[symbol] = a['Close']
+        except Exception:
+            continue
+
+    if not prepared:
+        raise HTTPException(503, 'V5 için yeterli veri hazırlanamadı')
+
+    # Same general market filter as V4 backtest.
+    close_df = pd.DataFrame(close_map).sort_index()
+    returns = close_df.pct_change(fill_method=None)
+    proxy = (1 + returns.mean(axis=1, skipna=True).fillna(0)).cumprod() * 100
+    proxy_ema20 = proxy.ewm(span=20, adjust=False).mean()
+    proxy_ema50 = proxy.ewm(span=50, adjust=False).mean()
+    proxy_slope5 = (proxy_ema20 / proxy_ema20.shift(5) - 1) * 100
+
+    above_ema50 = {
+        symbol: a['Close'] > a['EMA50']
+        for symbol, a in prepared.items()
+    }
+    breadth_df = pd.DataFrame(above_ema50).reindex(close_df.index)
+    breadth = breadth_df.mean(axis=1, skipna=True) * 100
+    market_positive = (
+        (proxy_ema20 > proxy_ema50)
+        & (proxy_slope5 > 0)
+        & (breadth >= 55)
+    )
+
+    all_dates = close_df.index
+    start_date = all_dates[-test_days] if len(all_dates) >= test_days else all_dates[0]
+    test_dates = all_dates[all_dates >= start_date]
+    split_date = test_dates[len(test_dates)//2]
+
+    strategies = {
+        'early_trend': [],
+        'breakout': [],
+        'strong_confirmation_market': [],
+    }
+
+    for symbol, a in prepared.items():
+        start_pos = max(220, len(a) - test_days)
+        end_pos = len(a) - max(horizons) - 1
+
+        conds = {
+            'early_trend': a['EARLY_TREND'],
+            'breakout': a['BREAKOUT_V5'],
+            'strong_confirmation_market': (
+                a['STRONG_CONFIRMATION_BASE']
+                & market_positive.reindex(a.index).fillna(False)
+            ),
+        }
+
+        for name, cond in conds.items():
+            last_event_pos = -10000
+            prev = False
+
+            for pos in range(start_pos, end_pos + 1):
+                is_on = bool(cond.iloc[pos])
+                new_event = is_on and (not prev) and (pos - last_event_pos >= cooldown_days)
+                prev = is_on
+                if not new_event:
+                    continue
+
+                entry = float(a['Close'].iloc[pos])
+                row = {
+                    'symbol': symbol,
+                    'date': pd.Timestamp(a.index[pos]),
+                    'early_move_score': float(a['EARLY_MOVE_SCORE'].iloc[pos]),
+                    'quality_score': float(a['QUALITY_SCORE'].iloc[pos]),
+                    'volume_score': float(a['VOLUME_SCORE'].iloc[pos]),
+                    'rvol': clean_num(a['RVOL20'].iloc[pos]),
+                }
+                for h in horizons:
+                    exit_price = float(a['Close'].iloc[pos+h])
+                    row[f'ret_{h}'] = ((exit_price / entry) - 1) * 100 - cost_pct
+
+                strategies[name].append(row)
+                last_event_pos = pos
+
+    def summary(rows):
+        df = pd.DataFrame(rows)
+        result = []
+        if df.empty:
+            return result
+
+        for seg_name, mask in [
+            ('development', df['date'] < split_date),
+            ('validation', df['date'] >= split_date),
+        ]:
+            seg = df[mask]
+            for h in horizons:
+                s = seg[f'ret_{h}'].dropna()
+                if not len(s):
+                    continue
+                result.append({
+                    'segment': seg_name,
+                    'horizon_days': h,
+                    'events': int(len(s)),
+                    'wins': int((s > 0).sum()),
+                    'losses': int((s <= 0).sum()),
+                    'success_rate_pct': round(float((s > 0).mean() * 100), 2),
+                    'avg_net_return_pct': round(float(s.mean()), 3),
+                    'median_net_return_pct': round(float(s.median()), 3),
+                })
+        return result
+
+    return {
+        'ok': True,
+        'model': 'v5_early_trend_breakout',
+        'tested_symbols': len(prepared),
+        'split_date': pd.Timestamp(split_date).date().isoformat(),
+        'settings': {
+            'test_days': test_days,
+            'cost_bps': cost_bps,
+            'cooldown_days': cooldown_days,
+        },
+        'results': {name: summary(rows) for name, rows in strategies.items()},
+        'event_counts': {name: len(rows) for name, rows in strategies.items()},
+        'interpretation': (
+            'Validation bölümünde erken trend ve breakout sinyallerinin 5/10 günlük '
+            'ortalama ve medyan getirileri ile başarı oranlarını strong_confirmation_market ile karşılaştır.'
+        ),
+        'caveats': [
+            'Current BIST30 composition geçmişe uygulanır; survivorship bias olabilir.',
+            'Yahoo Finance verisi resmi gerçek zamanlı BIST verisi değildir.',
+            'Erken sinyal daha fazla fırsat yakalayabilir ama yanlış sinyal sayısı da artabilir.',
+            'Backtest geçmiş performanstır; geleceği garanti etmez.',
+        ],
     }

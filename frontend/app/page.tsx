@@ -31,6 +31,7 @@ export default function Home(){
   const [pushToken,setPushToken]=useState('');
   const [tradeHistory,setTradeHistory]=useState<any[]>([]);
   const [tradeHistoryLoading,setTradeHistoryLoading]=useState(false);
+  const [v5,setV5]=useState<any>(null);
   const [mobileMenuOpen,setMobileMenuOpen]=useState(false);
 
   const loadSignals=async()=>{
@@ -67,6 +68,13 @@ export default function Home(){
     }
   };
 
+  const loadV5=async()=>{
+    try{
+      const r=await fetch(`${API}/api/analysis/v5/${symbol}`,{cache:'no-store'});
+      if(r.ok)setV5(await r.json());
+    }catch{}
+  };
+
   const loadTradeHistory=async()=>{
     setTradeHistoryLoading(true);
     try{
@@ -91,8 +99,12 @@ export default function Home(){
 
   useEffect(()=>{
     loadStock(true);
+    loadV5();
     const stockTimer=setInterval(()=>{
-      if(document.visibilityState==='visible')loadStock(false);
+      if(document.visibilityState==='visible'){
+        loadStock(false);
+        loadV5();
+      }
     },15000);
     return()=>clearInterval(stockTimer);
   },[symbol,period]);
@@ -264,6 +276,7 @@ export default function Home(){
           <div className="panel"><h3>Teknik Seviyeler</h3><Row k="● Destek" v={stock?.support} green/><Row k="● Direnç" v={stock?.resistance} red/></div>
           <div className="panel"><h3>Hacim Kalitesi</h3><Row k="Hacim Skoru" v={stock?.volume_analysis?.score}/><Row k="RVOL" v={stock?.volume_analysis?.rvol}/><Row k="MFI" v={stock?.volume_analysis?.mfi}/><Row k="CMF" v={stock?.volume_analysis?.cmf}/><p className="reason">• {stock?.volume_analysis?.state ?? '—'}</p>{stock?.volume_analysis?.reasons?.slice(0,3).map((r:string)=><p className="reason" key={r}>• {r}</p>)}</div>
           <div className="panel"><h3>Piyasa Rejimi</h3><div className="stateBox"><span>BIST yönü</span><b className={stock?.market_regime?.positive?'green':'red'}>{stock?.market_regime?.state ?? '—'}</b></div><p className="reason">{stock?.market_regime?.reason ?? 'Endeks verisi bekleniyor'}</p><div className="stateBox"><span>V4 teyit</span><b className={stock?.v4_signal==='GÜÇLÜ TEKNİK TEYİT'?'green':''}>{stock?.v4_signal ?? '—'}</b></div></div>
+          <div className="panel"><h3>V5 Erken Hareket</h3><div className="stateBox"><span>Sinyal</span><b className={(v5?.v5?.signal==='BREAKOUT'||v5?.v5?.signal==='GUCLU_TEKNIK_TEYIT')?'green':''}>{v5?.v5?.signal ?? '—'}</b></div><Row k="Erken Hareket Skoru" v={v5?.v5?.early_move_score}/><Row k="RVOL" v={v5?.v5?.rvol}/>{v5?.v5?.reasons?.slice(0,4).map((r:string)=><p className="reason" key={r}>• {r}</p>)}</div>
           <div className="panel"><h3>Kısa Teknik Yorum</h3>{stock?.technical?.reasons?.slice(0,5).map((r:string)=><p className="reason" key={r}>• {r}</p>)}</div>
         </aside>
       </div>
