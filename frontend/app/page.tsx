@@ -34,17 +34,12 @@ export default function Home(){
   const [v5,setV5]=useState<any>(null);
   const [openPositions,setOpenPositions]=useState<any[]>([]);
   const [v9Status,setV9Status]=useState<any>(null);
-  const [showExtraPanels,setShowExtraPanels]=useState(false);
   const [mobileMenuOpen,setMobileMenuOpen]=useState(false);
 
   const loadSignals=async()=>{
     try{
-      const r=await fetch(`${API}/api/signals/recent?days=30&limit=300`,{cache:'no-store'});
-      if(r.ok){
-        const j=await r.json();
-        setSignals(j?.items ?? []);
-      }
-
+      const r=await fetch(`${API}/api/signals?limit=100`,{cache:'no-store'});
+      if(r.ok){const d=await r.json();setSignals(d.items||[])}
       const s=await fetch(`${API}/api/signals/stats/summary?horizon_days=${horizon}`,{cache:'no-store'});
       if(s.ok)setStats(await s.json());
     }catch{}
@@ -99,15 +94,6 @@ export default function Home(){
     }catch{}
   };
 
-  const loadExtraPanels=async()=>{
-    setShowExtraPanels(true);
-    await Promise.allSettled([
-      loadScanner(),
-      loadOpenPositions(),
-      loadV9Status(),
-    ]);
-  };
-
   const loadTradeHistory=async()=>{
     setTradeHistoryLoading(true);
     try{
@@ -122,9 +108,15 @@ export default function Home(){
 
   useEffect(()=>{
     loadWatch();
+    loadScanner();
     loadSignals();
+    loadOpenPositions();
+    loadV9Status();
     const watchTimer=setInterval(loadWatch,60000);
-    return()=>{clearInterval(watchTimer);};
+    const scannerTimer=setInterval(loadScanner,120000);
+    const positionTimer=setInterval(loadOpenPositions,120000);
+    const v9Timer=setInterval(loadV9Status,120000);
+    return()=>{clearInterval(watchTimer);clearInterval(scannerTimer);clearInterval(positionTimer);clearInterval(v9Timer);};
   },[]);
 
   useEffect(()=>{
@@ -277,7 +269,7 @@ export default function Home(){
     {mobileMenuOpen?<button className="mobileBackdrop" onClick={()=>setMobileMenuOpen(false)} aria-label="Menüyü kapat"/>:null}
 
     <section className="mainArea">
-      <header className="topnav"><button className="mobileMenuBtn" onClick={()=>setMobileMenuOpen(true)}>☰ BIST 30</button><div className="brand">▮▮▮ <b>BIST TERMINAL</b></div><nav><span>Ana Sayfa</span><span className="active">Hisse Analizi</span><span>BIST 30 Tarayıcı</span><span>Haberler (KAP)</span><span>Takip Listesi</span><span>Son 1 Aylık Sinyaller</span></nav><div style={{display:'flex',gap:'8px',alignItems:'center'}}>
+      <header className="topnav"><button className="mobileMenuBtn" onClick={()=>setMobileMenuOpen(true)}>☰ BIST 30</button><div className="brand">▮▮▮ <b>BIST TERMINAL</b></div><nav><span>Ana Sayfa</span><span className="active">Hisse Analizi</span><span>BIST 30 Tarayıcı</span><span>Haberler (KAP)</span><span>Takip Listesi</span><span>Sinyal Geçmişi</span></nav><div style={{display:'flex',gap:'8px',alignItems:'center'}}>
           <button onClick={enableNotifications} style={{padding:'7px 10px',borderRadius:'7px',border:'1px solid #24445f',background:'#123451',color:'#fff',cursor:'pointer'}}>
             🔔 Bildirimleri Aç
           </button>
@@ -325,16 +317,6 @@ export default function Home(){
 
       <section className="panel scanner"><div className="sectionTitle"><div><h2>BIST 30 Fırsat Tarayıcı</h2><p>Teknik skoru yüksek hisseleri hızlıca görün.</p></div></div><div className="table"><div className="tr head"><span>Hisse</span><span>Fiyat</span><span>Değişim</span><span>Skor</span><span>RSI</span><span>Hacim</span><span>Destek</span><span>Direnç</span><span>Durum</span></div>{scan.map(x=><div className="tr" key={x.symbol} onClick={()=>{setSymbol(x.symbol);setMobileMenuOpen(false)}}><span><b>{x.symbol}</b></span><span>{x.price.toFixed(2)} ₺</span><span className={x.change_pct>=0?'green':'red'}>{x.change_pct>=0?'+':''}{x.change_pct.toFixed(2)}%</span><span>{x.score.toFixed(1)}</span><span>{x.rsi?.toFixed?.(1) ?? '—'}</span><span>{x.vol_ratio?.toFixed?.(2) ?? '—'}x</span><span>{x.support.toFixed(2)}</span><span>{x.resistance.toFixed(2)}</span><span>{x.state}</span></div>)}</div></section>
 
-      <section className="panel lazyPanelToggle">
-        <div>
-          <b>Ek Paneller</b>
-          <span>Tarayıcı, açık sinyaller ve geçmiş veriler yalnızca istediğinde yüklenir.</span>
-        </div>
-        <button onClick={showExtraPanels?()=>setShowExtraPanels(false):loadExtraPanels}>
-          {showExtraPanels?"Panelleri Gizle":"Alt Panelleri Yükle"}
-        </button>
-      </section>
-      {showExtraPanels && (<>
       <section className="panel v9PaperBanner">
         <div><b>V9 PAPER FORWARD TEST</b><span> Gerçek para emri yok — canlı sinyaller ve sonuçlar kaydediliyor.</span></div>
         <div className="v9StatusRow">
@@ -363,7 +345,7 @@ export default function Home(){
 
       <section className="panel tradeHistory">
         <div className="signalHeader">
-          <div><h2>Son 1 Aylık Geçmiş Sinyaller</h2><p>V4'ün geçmişte verdiği AL adayları ve stop/hedef/zaman çıkışları.</p></div>
+          <div><h2>Geçmiş V4 İşlemleri</h2><p>V4'ün geçmişte verdiği AL adayları ve stop/hedef/zaman çıkışları.</p></div>
           <div className="signalActions"><button onClick={loadTradeHistory}>{tradeHistoryLoading?"Yükleniyor...":"Geçmişi Yükle"}</button></div>
         </div>
         <div className="tradeTableWrap">
@@ -374,11 +356,9 @@ export default function Home(){
         </div>
       </section>
 
-      </>)}
-
       <section className="panel signalHistory">
         <div className="signalHeader">
-          <div><h2>Son 1 Aylık Sinyaller</h2><p className="monthSignalNote">Yalnızca son 30 gündeki kayıtlı sinyaller gösterilir.</p><p>PostgreSQL'e kaydedilen teknik sinyaller ve geçmiş performans takibi.</p></div>
+          <div><h2>Sinyal Geçmişi</h2><p>PostgreSQL'e kaydedilen teknik sinyaller ve geçmiş performans takibi.</p></div>
           <div className="signalActions">
             <label>Sonuç süresi<select value={horizon} onChange={e=>setHorizon(Number(e.target.value))}>{horizons.map(h=><option key={h} value={h}>{h} işlem günü</option>)}</select></label>
             <button onClick={evaluatePending} disabled={signalBusy}>Bekleyenleri değerlendir</button>

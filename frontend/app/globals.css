@@ -258,30 +258,3 @@ button,select{font:inherit}
 .performanceBanner>div{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 .performanceBanner b{font-size:12px}
 .performanceBanner span{font-size:10px;opacity:.7}
-
-/* V11 fast UI */
-.lazyPanelToggle{
-  margin-top:8px;
-  display:flex;
-  align-items:center;
-  justify-content:space-between;
-  gap:12px;
-}
-.lazyPanelToggle>div{display:flex;flex-direction:column;gap:4px}
-.lazyPanelToggle b{font-size:12px}
-.lazyPanelToggle span{font-size:10px;opacity:.68}
-.lazyPanelToggle button{
-  border:1px solid rgba(255,255,255,.12);
-  background:#12365a;
-  color:#fff;
-  padding:8px 12px;
-  border-radius:6px;
-  cursor:pointer;
-}
-
-/* V12 son 1 aylık sinyaller */
-.monthSignalNote{
-  margin:2px 0 8px 0;
-  font-size:10px;
-  opacity:.65;
-}
