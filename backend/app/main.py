@@ -13,7 +13,7 @@ from sqlalchemy import func
 
 from .analysis import indicators, technical_state
 from .data import BIST30, load_chart
-from .news import COMPANY_NAMES, company_news, kap_notifications
+from .news import COMPANY_NAMES, company_news, kap_notifications, article_image
 from .db import get_db
 from .models import Signal, SignalResult, NotificationToken, NotificationEvent, OpenSignalPosition
 from .signal_service import create_signal_from_analysis, evaluate_signal, serialize_signal, serialize_result
@@ -426,6 +426,18 @@ def news(symbol: str, limit: int = Query(default=20, ge=5, le=50)):
     }
 
 
+
+
+
+@app.get('/api/news/image-meta')
+def news_image_meta(url: str):
+    if not url.startswith(('http://', 'https://')):
+        raise HTTPException(400, 'Geçersiz haber adresi')
+    try:
+        img = article_image(url)
+        return {'image_url': img}
+    except Exception:
+        return {'image_url': None}
 
 @app.get('/api/news/image')
 def proxy_news_image(url: str):

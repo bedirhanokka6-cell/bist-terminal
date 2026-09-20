@@ -449,3 +449,32 @@ button,select{font:inherit}
 }
 .newsThumb.imageFailed .thumbFallback{opacity:1}
 .newsThumb:not(.imageFailed) img + .thumbFallback{opacity:0}
+
+/* V15 FIX: make left mini charts visible */
+.sidebar{
+  width:310px !important;
+  min-width:310px !important;
+}
+.appShell{
+  grid-template-columns:310px minmax(0,1fr) !important;
+}
+.watchHead,.watchRow{
+  grid-template-columns:72px 88px 64px 64px !important;
+  gap:6px !important;
+}
+.miniSpark{
+  display:block !important;
+  width:88px !important;
+  height:24px !important;
+  min-width:88px !important;
+  opacity:1 !important;
+}
+.watchRow{
+  overflow:visible !important;
+}
+@media(max-width:900px){
+  .sidebar{
+    width:290px !important;
+    min-width:290px !important;
+  }
+}

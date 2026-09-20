@@ -227,7 +227,7 @@ def company_news(symbol: str, limit: int = 20) -> list[dict[str, Any]]:
 
     rows.sort(key=lambda x: x.get("published_at") or "", reverse=True)
     rows = rows[:limit]
-    return _fill_missing_images(rows, max_items=min(16, limit))
+    return rows
 
 
 def kap_notifications(symbol: str, limit: int = 15) -> list[dict[str, Any]]:
@@ -261,7 +261,7 @@ def kap_notifications(symbol: str, limit: int = 15) -> list[dict[str, Any]]:
 
     rows.sort(key=lambda x: x.get("published_at") or "", reverse=True)
     rows = rows[:limit]
-    return _fill_missing_images(rows, max_items=min(12, limit))
+    return rows
 
 
 POSITIVE_KEYWORDS = [
@@ -316,3 +316,8 @@ def news_impact(title: str, kind: str = "HABER") -> dict[str, Any]:
         "impact_label": label,
         "impact_reason": reasons[0] if reasons else "Başlıktan belirgin yön çıkarılamadı",
     }
+
+
+def article_image(article_url: str) -> str | None:
+    """Resolve a single article's real publisher image on demand."""
+    return _extract_og_image(article_url)

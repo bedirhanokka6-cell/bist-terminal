@@ -43,6 +43,7 @@ export default function Home(){
   const [newsError,setNewsError]=useState('');
   const [newsNote,setNewsNote]=useState('');
   const [newsCounts,setNewsCounts]=useState({all:0,news:0,kap:0});
+  const [newsImages,setNewsImages]=useState<Record<string,string>>({});
 
 
   const loadSignals=async()=>{
@@ -110,7 +111,9 @@ export default function Home(){
       const r=await fetch(`${API}/api/news/${symbol}?limit=25`,{cache:'no-store'});
       const j=await r.json();
       if(!r.ok)throw new Error(j?.detail||'Haberler alınamadı');
-      setNewsItems(j?.all ?? []);
+      const items=j?.all ?? [];
+      setNewsItems(items);
+      setTimeout(()=>resolveNewsImages(items),50);
       setNewsNote(j?.source_note ?? '');
       setNewsCounts(j?.counts ?? {all:0,news:0,kap:0});
     }catch(e:any){
@@ -118,6 +121,19 @@ export default function Home(){
     }finally{
       if(showLoading)setNewsLoading(false);
     }
+  };
+
+  const resolveNewsImages=async(items:NewsItem[])=>{
+    const subset=(items||[]).slice(0,16);
+    subset.forEach(async(n)=>{
+      if(!n?.url || newsImages[n.url])return;
+      try{
+        const r=await fetch(`${API}/api/news/image-meta?url=${encodeURIComponent(n.url)}`,{cache:'force-cache'});
+        if(!r.ok)return;
+        const j=await r.json();
+        if(j?.image_url)setNewsImages(prev=>({...prev,[n.url]:j.image_url}));
+      }catch{}
+    });
   };
 
   const loadTradeHistory=async()=>{
@@ -346,9 +362,9 @@ export default function Home(){
                 </div>
               </div>
               <div className={`newsThumb ${n.kind==='KAP'?'kapThumb':''}`}>
-                {n.image_url?
+                {(newsImages[n.url]||n.image_url)?
                   <img
-                    src={`${API}/api/news/image?url=${encodeURIComponent(n.image_url)}`}
+                    src={`${API}/api/news/image?url=${encodeURIComponent(newsImages[n.url]||n.image_url)}`}
                     alt={n.title}
                     loading="lazy"
                     onError={(e:any)=>{
@@ -476,15 +492,16 @@ export default function Home(){
 }
 
 function Sparkline({values,positive}:{values:number[];positive:boolean}){
-  if(!values?.length)return <div className="sparkEmpty">—</div>;
-  const min=Math.min(...values), max=Math.max(...values), span=(max-min)||1;
-  const pts=values.map((v,i)=>{
-    const x=(i/Math.max(values.length-1,1))*64;
-    const y=20-((v-min)/span)*18;
+  const vals=(values||[]).filter((v:any)=>Number.isFinite(Number(v))).map(Number);
+  if(vals.length<2)return <div className="sparkEmpty">—</div>;
+  const min=Math.min(...vals), max=Math.max(...vals), span=(max-min)||1;
+  const pts=vals.map((v,i)=>{
+    const x=(i/Math.max(vals.length-1,1))*88;
+    const y=22-((v-min)/span)*20;
     return `${x.toFixed(1)},${y.toFixed(1)}`;
   }).join(' ');
-  return <svg className="miniSpark" viewBox="0 0 64 22" preserveAspectRatio="none" aria-hidden="true">
-    <polyline points={pts} fill="none" stroke="currentColor" strokeWidth="1.8" vectorEffect="non-scaling-stroke"/>
+  return <svg className="miniSpark" viewBox="0 0 88 24" preserveAspectRatio="none" aria-hidden="true">
+    <polyline points={pts} fill="none" stroke={positive?'#13e0b1':'#ff4d67'} strokeWidth="1.8" vectorEffect="non-scaling-stroke"/>
   </svg>
 }
 
