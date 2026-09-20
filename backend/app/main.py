@@ -1,11 +1,12 @@
-from fastapi import FastAPI, HTTPException, Depends, Query, Header, Response
+import time
+from starlette.middleware.gzip import GZipMiddleware
+from fastapi import FastAPI, HTTPException, Depends, Query, Header
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import numpy as np
 import pandas as pd
 import yfinance as yf
 import os
-import time as pytime
 from datetime import datetime, time
 from zoneinfo import ZoneInfo
 from sqlalchemy.orm import Session
@@ -13,12 +14,14 @@ from sqlalchemy import func
 
 from .analysis import indicators, technical_state
 from .data import BIST30, load_chart
+from .news import company_news, kap_notifications
 from .db import get_db
 from .models import Signal, SignalResult, NotificationToken, NotificationEvent, OpenSignalPosition
 from .signal_service import create_signal_from_analysis, evaluate_signal, serialize_signal, serialize_result
 from .push_service import send_push
 
 app = FastAPI(title='BIST Terminal API', version='0.2.2')
+app.add_middleware(GZipMiddleware, minimum_size=1000)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -34,33 +37,6 @@ app.add_middleware(
     allow_methods=['*'],
     allow_headers=['*'],
 )
-
-
-
-# ==========================================================
-# V16 FINAL PERFORMANCE CACHE
-# ==========================================================
-_RUNTIME_CACHE = {}
-
-def _cache_get(key: str, ttl_seconds: int):
-    item = _RUNTIME_CACHE.get(key)
-    if not item:
-        return None
-    ts, value = item
-    if pytime.time() - ts > ttl_seconds:
-        _RUNTIME_CACHE.pop(key, None)
-        return None
-    return value
-
-def _cache_set(key: str, value):
-    _RUNTIME_CACHE[key] = (pytime.time(), value)
-    # Basit bellek koruması
-    if len(_RUNTIME_CACHE) > 100:
-        oldest = sorted(_RUNTIME_CACHE.items(), key=lambda kv: kv[1][0])[:20]
-        for k, _ in oldest:
-            _RUNTIME_CACHE.pop(k, None)
-    return value
-
 
 def clean_num(v):
     if v is None or (isinstance(v, float) and (np.isnan(v) or np.isinf(v))):
@@ -174,6 +150,26 @@ def data_freshness(index_value):
             "market_reason": market["reason"],
         }
 
+
+# ==========================================================
+# V10 PERFORMANCE CACHE
+# ==========================================================
+_V10_CACHE = {}
+
+def _v10_cache_get(key):
+    item = _V10_CACHE.get(key)
+    if not item:
+        return None
+    expires_at, value = item
+    if time.time() >= expires_at:
+        _V10_CACHE.pop(key, None)
+        return None
+    return value
+
+def _v10_cache_set(key, value, ttl_seconds):
+    _V10_CACHE[key] = (time.time() + ttl_seconds, value)
+    return value
+
 @app.get('/health')
 def health():
     market = bist_market_status()
@@ -187,9 +183,6 @@ def health():
 
 @app.get('/api/bist30')
 def bist30():
-    cached = _cache_get('bist30', 45)
-    if cached is not None:
-        return cached
     # 30 hisseyi tek tek indirmek yerine tek toplu istekte al.
     # Bu, özellikle Render üzerinde sol BIST30 listesinin çok daha hızlı dolmasını sağlar.
     tickers = [s + '.IS' for s in BIST30]
@@ -226,12 +219,10 @@ def bist30():
 
                 p = float(closes.iloc[-1])
                 prev = float(closes.iloc[-2])
-                spark = [round(float(v), 4) for v in closes.tail(24).tolist()]
                 rows.append({
                     'symbol': s,
                     'price': p,
                     'change_pct': ((p / prev) - 1) * 100 if prev else 0,
-                    'sparkline': spark,
                 })
             except Exception:
                 continue
@@ -245,13 +236,10 @@ def bist30():
                     continue
                 p = float(d['Close'].iloc[-1])
                 prev = float(d['Close'].iloc[-2])
-                closes = pd.to_numeric(d['Close'], errors='coerce').dropna()
-                spark = [round(float(v), 4) for v in closes.tail(24).tolist()]
                 rows.append({
                     'symbol': s,
                     'price': p,
                     'change_pct': ((p / prev) - 1) * 100 if prev else 0,
-                    'sparkline': spark,
                 })
             except Exception:
                 continue
@@ -259,7 +247,7 @@ def bist30():
     # Her zaman BIST30 sırasını koru.
     order = {s: i for i, s in enumerate(BIST30)}
     rows.sort(key=lambda x: order.get(x['symbol'], 999))
-    return _cache_set('bist30', rows)
+    return rows
 
 @app.get('/api/stock/{symbol}')
 def stock(symbol: str, period: str = '1A'):
@@ -423,6 +411,15 @@ def scanner(min_score: float = 0):
         key=lambda x: (x['score'], x['change_pct']),
         reverse=True
     )
+
+@app.get('/api/news/{symbol}')
+def news(symbol: str):
+    symbol = symbol.upper()
+    return {
+        'symbol': symbol,
+        'news': company_news(symbol),
+        'kap': kap_notifications(symbol)
+    }
 
 # ==========================================================
 # SİNYAL KAYDI + GEÇMİŞ + BAŞARI TAKİBİ
@@ -793,9 +790,13 @@ def v6_position_history(
 # ==========================================================
 
 def _batch_daily_signal_data():
-    """BIST30 için sinyal üretiminde kullanılan günlük veriyi tek istekte al."""
+    """BIST30 günlük verisini 5 dakika cache'ler; aynı istek tekrar tekrar Yahoo'ya gitmez."""
+    cached = _v10_cache_get('daily_signal_batch')
+    if cached is not None:
+        return cached
+
     tickers = [s + '.IS' for s in BIST30]
-    return yf.download(
+    data = yf.download(
         tickers=tickers,
         period='18mo',
         interval='1d',
@@ -804,6 +805,7 @@ def _batch_daily_signal_data():
         threads=True,
         group_by='ticker',
     )
+    return _v10_cache_set('daily_signal_batch', data, 300)
 
 
 def _extract_ticker_frame(batch, symbol: str):
@@ -934,9 +936,10 @@ def _v9_trade_levels(a, entry_price: float):
 
 @app.get('/api/v9/live-status')
 def v9_live_status(db: Session = Depends(get_db)):
-    cached = _cache_get('v9_live_status', 300)
+    cached = _v10_cache_get('v9_live_status')
     if cached is not None:
         return cached
+
     open_count = (
         db.query(OpenSignalPosition)
         .filter(OpenSignalPosition.status == 'OPEN')
@@ -948,7 +951,7 @@ def v9_live_status(db: Session = Depends(get_db)):
     except Exception as exc:
         regime = {'state': 'UNKNOWN', 'error': str(exc)}
 
-    return {
+    result = {
         'ok': True,
         'model': 'v9_final_forward_test',
         'mode': 'PAPER_FORWARD_TEST',
@@ -1337,14 +1340,13 @@ def scan_and_notify(
         except Exception:
             continue
 
-    response = {
+    return {
         'ok': True,
         'skipped': False,
         'market_status': market['market_status'],
         'alerts_sent': len(fired),
         'alerts': fired,
     }
-    return _cache_set('v9_live_status', response)
 
 
 # ==========================================================
@@ -4158,18 +4160,3 @@ def backtest_v9_forward(
         ],
     }
 
-
-
-@app.get('/api/performance/status')
-def performance_status():
-    return {
-        'ok': True,
-        'version': 'V16_FINAL_PERFORMANCE',
-        'cache_items': len(_RUNTIME_CACHE),
-        'optimizations': [
-            'BIST30 45sn cache',
-            'V9 piyasa rejimi 5dk cache',
-            'Geçmiş backtest ilk açılışta yüklenmez',
-            'Tarayıcı yenileme aralıkları azaltıldı',
-        ]
-    }

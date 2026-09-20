@@ -253,65 +253,8 @@ button,select{font:inherit}
 .v9PaperBanner>div:first-child span{font-size:10px;opacity:.72}
 .v9StatusRow{display:flex;gap:16px;flex-wrap:wrap;margin-top:8px;font-size:10px}
 
-/* V13 left BIST30 mini sparklines */
-.watchHead,.watchRow{
-  grid-template-columns:minmax(66px,1fr) 72px 66px 62px;
-}
-.watchHead span:nth-child(n+2){text-align:right}
-.miniSpark{
-  width:72px;
-  height:22px;
-  color:currentColor;
-  opacity:.95;
-  overflow:visible;
-}
-.sparkEmpty{
-  text-align:center;
-  color:#5e7386;
-  font-size:10px;
-}
-.watchRow.up .miniSpark{color:#13e0b1}
-.watchRow.down .miniSpark{color:#ff4d67}
-
-/* V15 FIX: make left mini charts visible */
-.sidebar{
-  width:310px !important;
-  min-width:310px !important;
-}
-.appShell{
-  grid-template-columns:310px minmax(0,1fr) !important;
-}
-.watchHead,.watchRow{
-  grid-template-columns:72px 88px 64px 64px !important;
-  gap:6px !important;
-}
-.miniSpark{
-  display:block !important;
-  width:88px !important;
-  height:24px !important;
-  min-width:88px !important;
-  opacity:1 !important;
-}
-.watchRow{
-  overflow:visible !important;
-}
-@media(max-width:900px){
-  .sidebar{
-    width:290px !important;
-    min-width:290px !important;
-  }
-}
-
-/* V16 Final Performance */
-.perfBadge{
-  font-size:9px;
-  color:#75e7c1;
-  background:#0b352f;
-  border:1px solid #17594d;
-  border-radius:5px;
-  padding:5px 7px;
-  white-space:nowrap;
-}
-.newsThumb img{
-  content-visibility:auto;
-}
+/* V10 performance */
+.performanceBanner{margin-top:8px}
+.performanceBanner>div{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.performanceBanner b{font-size:12px}
+.performanceBanner span{font-size:10px;opacity:.7}

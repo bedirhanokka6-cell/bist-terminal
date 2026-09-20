@@ -4,7 +4,7 @@ import {PriceChart, AnalysisChart} from '../components/StockChart';
 import {initializeApp, getApps} from 'firebase/app';
 import {getMessaging, getToken, onMessage, isSupported} from 'firebase/messaging';
 
-type Stock={symbol:string;price:number;change_pct:number;sparkline?:number[]};
+type Stock={symbol:string;price:number;change_pct:number};
 type Scanner={symbol:string;price:number;change_pct:number;score:number;state:string;rsi:number|null;vol_ratio:number|null;support:number;resistance:number};
 type SignalItem={id:number;symbol:string;signal_type:string;score:number;state:string;price:number;support:number|null;resistance:number|null;reasons:string[];created_at:string|null};
 type SignalStats={horizon_days:number;evaluated_total:number;directional_total:number;successful:number;failed:number;success_rate_pct:number|null;average_return_pct:number|null;note:string};
@@ -31,12 +31,10 @@ export default function Home(){
   const [pushToken,setPushToken]=useState('');
   const [tradeHistory,setTradeHistory]=useState<any[]>([]);
   const [tradeHistoryLoading,setTradeHistoryLoading]=useState(false);
-  const [historyLoaded,setHistoryLoaded]=useState(false);
   const [v5,setV5]=useState<any>(null);
   const [openPositions,setOpenPositions]=useState<any[]>([]);
   const [v9Status,setV9Status]=useState<any>(null);
   const [mobileMenuOpen,setMobileMenuOpen]=useState(false);
-
 
   const loadSignals=async()=>{
     try{
@@ -96,17 +94,13 @@ export default function Home(){
     }catch{}
   };
 
-
-
   const loadTradeHistory=async()=>{
-    if(tradeHistoryLoading)return;
     setTradeHistoryLoading(true);
     try{
       const r=await fetch(`${API}/api/backtest/v4-trades?limit=40`,{cache:'no-store'});
       if(r.ok){
         const j=await r.json();
         setTradeHistory(j?.trades ?? []);
-        setHistoryLoaded(true);
       }
     }catch{}
     finally{setTradeHistoryLoading(false);}
@@ -119,26 +113,35 @@ export default function Home(){
     loadOpenPositions();
     loadV9Status();
     const watchTimer=setInterval(loadWatch,60000);
-    const scannerTimer=setInterval(loadScanner,180000);
-    const positionTimer=setInterval(loadOpenPositions,60000);
-    const v9Timer=setInterval(loadV9Status,300000);
+    const scannerTimer=setInterval(loadScanner,120000);
+    const positionTimer=setInterval(loadOpenPositions,120000);
+    const v9Timer=setInterval(loadV9Status,120000);
     return()=>{clearInterval(watchTimer);clearInterval(scannerTimer);clearInterval(positionTimer);clearInterval(v9Timer);};
   },[]);
 
   useEffect(()=>{
     loadStock(true);
     loadV5();
+
     const stockTimer=setInterval(()=>{
       if(document.visibilityState==='visible'){
         loadStock(false);
+      }
+    },15000);
+
+    const analysisTimer=setInterval(()=>{
+      if(document.visibilityState==='visible'){
         loadV5();
       }
-    },30000);
-    return()=>clearInterval(stockTimer);
+    },120000);
+
+    return()=>{
+      clearInterval(stockTimer);
+      clearInterval(analysisTimer);
+    };
   },[symbol,period]);
 
   useEffect(()=>{loadSignals();},[horizon]);
-
 
   const saveCurrentSignal=async()=>{
     setSignalBusy(true);setSignalMessage('');
@@ -259,20 +262,20 @@ export default function Home(){
   return <main className="appShell">
     <aside className={`sidebar ${mobileMenuOpen?'open':''}`}>
       <div className="sidebarTop"><div className="brand">▮▮▮ <b>BIST TERMINAL</b></div><button className="mobileCloseBtn" onClick={()=>setMobileMenuOpen(false)} aria-label="Menüyü kapat">✕</button></div><h3>BIST 30</h3>
-      <div className="watchHead"><span>Hisse</span><span>Mini Grafik</span><span>Fiyat</span><span>Değişim</span></div>
-      <div className="watchList">{watch.map(x=><button key={x.symbol} className={`watchRow ${x.change_pct>=0?'up':'down'} ${x.symbol===symbol?'active':''}`} onClick={()=>{setSymbol(x.symbol);setMobileMenuOpen(false)}}><span><i>{x.change_pct>=0?'▲':'▼'}</i>{x.symbol}</span><Sparkline values={x.sparkline||[]} positive={x.change_pct>=0}/><b>{x.price.toFixed(2)}</b><em>{x.change_pct>=0?'+':''}{x.change_pct.toFixed(2)}%</em></button>)}</div>
+      <div className="watchHead"><span>Hisse</span><span>Fiyat</span><span>Değişim</span></div>
+      <div className="watchList">{watch.map(x=><button key={x.symbol} className={`watchRow ${x.change_pct>=0?'up':'down'} ${x.symbol===symbol?'active':''}`} onClick={()=>{setSymbol(x.symbol);setMobileMenuOpen(false)}}><span><i>{x.change_pct>=0?'▲':'▼'}</i>{x.symbol}</span><b>{x.price.toFixed(2)}</b><em>{x.change_pct>=0?'+':''}{x.change_pct.toFixed(2)}%</em></button>)}</div>
       <small>Veriler ücretsiz kaynaklardan gelir; gerçek zamanlı olduğu garanti edilmez.</small>
     </aside>
     {mobileMenuOpen?<button className="mobileBackdrop" onClick={()=>setMobileMenuOpen(false)} aria-label="Menüyü kapat"/>:null}
 
     <section className="mainArea">
-      <header className="topnav"><button className="mobileMenuBtn" onClick={()=>setMobileMenuOpen(true)}>☰ BIST 30</button><div className="brand">▮▮▮ <b>BIST TERMINAL</b></div><nav><span className="active">Hisse Analizi</span></nav><div style={{display:'flex',gap:'8px',alignItems:'center'}}>
+      <header className="topnav"><button className="mobileMenuBtn" onClick={()=>setMobileMenuOpen(true)}>☰ BIST 30</button><div className="brand">▮▮▮ <b>BIST TERMINAL</b></div><nav><span>Ana Sayfa</span><span className="active">Hisse Analizi</span><span>BIST 30 Tarayıcı</span><span>Haberler (KAP)</span><span>Takip Listesi</span><span>Sinyal Geçmişi</span></nav><div style={{display:'flex',gap:'8px',alignItems:'center'}}>
           <button onClick={enableNotifications} style={{padding:'7px 10px',borderRadius:'7px',border:'1px solid #24445f',background:'#123451',color:'#fff',cursor:'pointer'}}>
             🔔 Bildirimleri Aç
           </button>
           {pushToken?<button onClick={copyPushToken} style={{padding:'7px 10px',borderRadius:'7px',border:'1px solid #24445f',background:'#0e2435',color:'#b8c7d4',cursor:'pointer'}}>Tokeni Kopyala</button>:null}
           <span style={{fontSize:'11px',color:pushStatus==='Bildirim açık'?'#32d296':'#9aa4b2'}}>{pushStatus}</span>
-          <span className="perfBadge">⚡ V16 HIZLI</span><div className="market">● Piyasa Takip</div>
+          <div className="market">● Piyasa Takip</div>
         </div></header>
       <div className="periods">{periods.map(p=><button className={period===p?'active':''} onClick={()=>setPeriod(p)} key={p}>{p}</button>)}</div>
       <section className="company">
@@ -287,7 +290,7 @@ export default function Home(){
             <span>•</span>
             <span>{dataAge==null?'Gecikme: —':`Gecikme: ${Number(dataAge).toFixed(1)} dk`}</span>
             <span>•</span>
-            <b style={{color:dataStatusColor}}>{dataStatus}</b><span>•</span><span>Otomatik yenileme: 30 sn</span>
+            <b style={{color:dataStatusColor}}>{dataStatus}</b><span>•</span><span>Otomatik yenileme: 15 sn</span>
           </div>
         </div>
       </section>
@@ -323,9 +326,13 @@ export default function Home(){
         </div>
       </section>
 
+      <section className="panel performanceBanner">
+        <div><b>V10 Hız Modu</b><span> Ağır geçmiş testleri otomatik yüklenmez; günlük analizler seyrek, fiyat verisi hızlı yenilenir.</span></div>
+      </section>
+
       <section className="panel openSignals">
         <div className="signalHeader">
-          <div><h2>Açık V9 Paper Sinyalleri</h2><p>Canlı paper sinyallerinin giriş, stop ve hedeflerini takip eder.</p></div>
+          <div><h2>Açık V6 Sinyalleri</h2><p>BREAKOUT / güçlü teyit sonrası stop ve hedefleri otomatik takip eder.</p></div>
           <div className="signalActions"><button onClick={loadOpenPositions}>Yenile</button></div>
         </div>
         <div className="tradeTableWrap">
@@ -339,13 +346,13 @@ export default function Home(){
       <section className="panel tradeHistory">
         <div className="signalHeader">
           <div><h2>Geçmiş V4 İşlemleri</h2><p>V4'ün geçmişte verdiği AL adayları ve stop/hedef/zaman çıkışları.</p></div>
-          <div className="signalActions"><button onClick={loadTradeHistory} disabled={tradeHistoryLoading}>{tradeHistoryLoading?'Yükleniyor...':historyLoaded?'Yenile':'Geçmişi Yükle'}</button></div>
+          <div className="signalActions"><button onClick={loadTradeHistory}>{tradeHistoryLoading?"Yükleniyor...":"Geçmişi Yükle"}</button></div>
         </div>
         <div className="tradeTableWrap">
           <div className="tradeTr head"><span>Hisse</span><span>AL tarihi</span><span>Giriş</span><span>Çıkış tarihi</span><span>Çıkış</span><span>Neden</span><span>Getiri</span><span>Skor</span><span>Hacim</span></div>
           {tradeHistory.length?tradeHistory.map((t:any,i:number)=><div className="tradeTr" key={`${t.symbol}-${t.entry_date}-${i}`} onClick={()=>setSymbol(t.symbol)}>
             <b>{t.symbol}</b><span>{t.entry_date}</span><span>{fmt(t.entry_price)} ₺</span><span>{t.exit_date}</span><span>{fmt(t.exit_price)} ₺</span><span>{t.exit_reason==='TARGET'?'HEDEF':t.exit_reason==='STOP'?'STOP':'ZAMAN'}</span><b className={Number(t.net_return_pct)>=0?'green':'red'}>{Number(t.net_return_pct)>=0?'+':''}{Number(t.net_return_pct).toFixed(2)}%</b><span>{Number(t.quality_score).toFixed(2)}</span><span>{Number(t.volume_score).toFixed(2)}</span>
-          </div>):<div className="emptySignals">{tradeHistoryLoading?'Geçmiş işlemler hesaplanıyor...':historyLoaded?'Geçmiş işlem bulunamadı.':'Performans için geçmiş işlemler otomatik yüklenmiyor. İstersen “Geçmişi Yükle”ye bas.'}</div>}
+          </div>):<div className="emptySignals">{tradeHistoryLoading?'Geçmiş işlemler hesaplanıyor...':'Geçmiş işlem bulunamadı.'}</div>}
         </div>
       </section>
 
@@ -375,25 +382,9 @@ export default function Home(){
   </main>
 }
 
-function Sparkline({values,positive}:{values:number[];positive:boolean}){
-  const vals=(values||[]).filter((v:any)=>Number.isFinite(Number(v))).map(Number);
-  if(vals.length<2)return <div className="sparkEmpty">—</div>;
-  const min=Math.min(...vals), max=Math.max(...vals), span=(max-min)||1;
-  const pts=vals.map((v,i)=>{
-    const x=(i/Math.max(vals.length-1,1))*88;
-    const y=22-((v-min)/span)*20;
-    return `${x.toFixed(1)},${y.toFixed(1)}`;
-  }).join(' ');
-  return <svg className="miniSpark" viewBox="0 0 88 24" preserveAspectRatio="none" aria-hidden="true">
-    <polyline points={pts} fill="none" stroke={positive?'#13e0b1':'#ff4d67'} strokeWidth="1.8" vectorEffect="non-scaling-stroke"/>
-  </svg>
-}
-
 function fmt(v:any){return v==null?'—':Number(v).toFixed(2)}
 function Row({k,v,green,red}:{k:string;v:any;green?:boolean;red?:boolean}){return <div className="row"><span className={green?'green':red?'red':''}>{k}</span><b>{fmt(v)}</b></div>}
 function Metric({k,v}:{k:string;v:string}){return <div className="metric"><span>{k}</span><b>{v}</b></div>}
 function signalClass(v:string){return v==='AL'?'buy':v==='SAT'?'sell':'wait'}
 function formatDate(v:string|null){if(!v)return '—';try{return new Intl.DateTimeFormat('tr-TR',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'}).format(new Date(v))}catch{return v}}
 function formatDataTime(v:string){try{return new Intl.DateTimeFormat('tr-TR',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit'}).format(new Date(v))}catch{return v}}
-
-
