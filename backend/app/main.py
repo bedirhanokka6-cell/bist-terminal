@@ -12,7 +12,7 @@ from sqlalchemy import func
 
 from .analysis import indicators, technical_state
 from .data import BIST30, load_chart
-from .news import company_news, kap_notifications
+from .news import COMPANY_NAMES, company_news, kap_notifications
 from .db import get_db
 from .models import Signal, SignalResult, NotificationToken, NotificationEvent, OpenSignalPosition
 from .signal_service import create_signal_from_analysis, evaluate_signal, serialize_signal, serialize_result
@@ -390,12 +390,33 @@ def scanner(min_score: float = 0):
     )
 
 @app.get('/api/news/{symbol}')
-def news(symbol: str):
-    symbol = symbol.upper()
+def news(symbol: str, limit: int = Query(default=20, ge=5, le=50)):
+    symbol = symbol.upper().replace('.IS', '')
+    if symbol not in BIST30:
+        raise HTTPException(404, 'BIST30 içinde hisse bulunamadı')
+
+    news_rows = company_news(symbol, limit=limit)
+    kap_rows = kap_notifications(symbol, limit=min(limit, 20))
+
+    merged = sorted(
+        [*news_rows, *kap_rows],
+        key=lambda x: x.get('published_at') or '',
+        reverse=True,
+    )
+
     return {
         'symbol': symbol,
-        'news': company_news(symbol),
-        'kap': kap_notifications(symbol)
+        'company': COMPANY_NAMES.get(symbol, symbol) if 'COMPANY_NAMES' in globals() else symbol,
+        'news': news_rows,
+        'kap': kap_rows,
+        'all': merged,
+        'counts': {
+            'news': len(news_rows),
+            'kap': len(kap_rows),
+            'all': len(merged),
+        },
+        'source_note': 'Haberler ücretsiz RSS kaynaklarından derlenir. KAP bölümü kap.org.tr alanına indekslenen sonuçları gösterir; resmi KAP ekranı esas kaynaktır.',
+        'official_kap_url': 'https://www.kap.org.tr/tr/bildirim-sorgu',
     }
 
 # ==========================================================

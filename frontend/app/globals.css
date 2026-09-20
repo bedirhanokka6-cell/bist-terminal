@@ -252,3 +252,39 @@ button,select{font:inherit}
 .v9PaperBanner>div:first-child b{font-size:12px}
 .v9PaperBanner>div:first-child span{font-size:10px;opacity:.72}
 .v9StatusRow{display:flex;gap:16px;flex-wrap:wrap;margin-top:8px;font-size:10px}
+
+/* V10 Haberler + KAP */
+.topnav nav{display:flex;gap:4px;align-items:center}
+.navItem{border:0;background:transparent;color:#8ea2b5;padding:8px 10px;border-radius:6px;cursor:pointer;font-size:11px}
+.navItem:hover{background:rgba(255,255,255,.04);color:#fff}
+.navItem.active{background:#153957;color:#fff}
+.newsPage{padding:10px 0 24px}
+.newsHero{display:flex;justify-content:space-between;gap:20px;align-items:center;padding:18px}
+.newsHero h1{margin:4px 0 4px;font-size:22px}
+.newsHero p{margin:0;color:#8ea2b5;font-size:11px}
+.newsHeroActions{display:flex;gap:8px;flex-wrap:wrap}
+.newsHeroActions button,.newsHeroActions a{border:1px solid #24445f;background:#123451;color:#fff;padding:9px 12px;border-radius:7px;text-decoration:none;cursor:pointer;font-size:11px}
+.newsControls{padding:10px;margin-top:8px}
+.newsSymbolStrip{display:flex;gap:5px;overflow-x:auto;padding-bottom:8px}
+.newsSymbolStrip button{flex:0 0 auto;border:1px solid #18344a;background:#0c1d2b;color:#91a7b9;border-radius:5px;padding:6px 8px;font-size:10px;cursor:pointer}
+.newsSymbolStrip button.active{background:#17486e;color:#fff;border-color:#2f6f9e}
+.newsTabs{display:flex;gap:6px;border-top:1px solid rgba(255,255,255,.05);padding-top:9px}
+.newsTabs button{border:1px solid #18344a;background:#0d2232;color:#9fb0bd;border-radius:6px;padding:7px 11px;cursor:pointer}
+.newsTabs button.active{background:#17486e;color:#fff}
+.newsTabs b{margin-left:5px}
+.newsGrid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-top:8px}
+.newsCard{display:block;padding:14px;text-decoration:none;color:#e8eef3;min-height:120px;transition:.15s ease}
+.newsCard:hover{transform:translateY(-1px);border-color:#315d7b;background:#0d2232}
+.newsMeta{display:flex;gap:6px;align-items:center;color:#7890a2;font-size:9px;margin-bottom:9px}
+.newsKind{background:#123f5e;color:#77cfff;border-radius:4px;padding:3px 6px;font-weight:700}
+.newsKind.kap{background:#473916;color:#ffd36b}
+.newsCard h3{font-size:13px;line-height:1.45;margin:0 0 14px}
+.newsOpen{font-size:10px;color:#55b8ff;margin-top:auto}
+.newsError{margin-top:8px;padding:12px;color:#ff7f7f}
+.emptyNews{margin-top:8px;padding:22px;text-align:center;color:#8da1b2}
+.newsFootnote{color:#6f8597;font-size:9px;margin-top:10px;padding:0 4px}
+@media(max-width:900px){
+  .newsGrid{grid-template-columns:1fr}
+  .newsHero{align-items:flex-start;flex-direction:column}
+  .topnav nav{overflow-x:auto}
+}
