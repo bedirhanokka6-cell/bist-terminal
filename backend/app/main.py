@@ -4219,16 +4219,7 @@ def recent_signals(
         .all()
     )
 
-    items = []
-    for x in rows:
-        items.append({
-            'id': x.id,
-            'symbol': getattr(x, 'symbol', None),
-            'signal': getattr(x, 'signal', None),
-            'score': getattr(x, 'score', None),
-            'price': getattr(x, 'price', None),
-            'created_at': x.created_at.isoformat() if getattr(x, 'created_at', None) else None,
-        })
+    items = [serialize_signal(x) for x in rows]
 
     return {
         'days': days,

@@ -42,8 +42,11 @@ export default function Home(){
       const r=await fetch(`${API}/api/signals/recent?days=30&limit=300`,{cache:'no-store'});
       if(r.ok){
         const j=await r.json();
-        setSignalHistory(j?.items ?? []);
+        setSignals(j?.items ?? []);
       }
+
+      const s=await fetch(`${API}/api/signals/stats/summary?horizon_days=${horizon}`,{cache:'no-store'});
+      if(s.ok)setStats(await s.json());
     }catch{}
   };
 
