@@ -11,7 +11,7 @@ type SignalStats={horizon_days:number;evaluated_total:number;directional_total:n
 
 const API=process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 const periods=['1G','5G','1A','3A','6A','1Y','2Y'];
-const analyses=['RSI','MACD','Hacim','Bollinger','EMA'];
+const analyses=['RSI','MACD','Hacim','RVOL','OBV','MFI','CMF','Bollinger','EMA'];
 const horizons=[1,3,5,10];
 
 export default function Home(){
@@ -40,16 +40,46 @@ export default function Home(){
     }catch{}
   };
 
+  const loadWatch=async()=>{
+    try{
+      const r=await fetch(`${API}/api/bist30`,{cache:'no-store'});
+      if(r.ok)setWatch(await r.json());
+    }catch{}
+  };
+
+  const loadScanner=async()=>{
+    try{
+      const r=await fetch(`${API}/api/scanner?min_score=6`,{cache:'no-store'});
+      if(r.ok)setScan(await r.json());
+    }catch{}
+  };
+
+  const loadStock=async(showLoading=false)=>{
+    if(showLoading)setLoading(true);
+    try{
+      const r=await fetch(`${API}/api/stock/${symbol}?period=${period}`,{cache:'no-store'});
+      if(r.ok)setStock(await r.json());
+    }catch{}
+    finally{
+      if(showLoading)setLoading(false);
+    }
+  };
+
   useEffect(()=>{
-    fetch(`${API}/api/bist30`).then(r=>r.json()).then(setWatch).catch(()=>{});
-    fetch(`${API}/api/scanner?min_score=6`).then(r=>r.json()).then(setScan).catch(()=>{});
+    loadWatch();
+    loadScanner();
     loadSignals();
+    const watchTimer=setInterval(loadWatch,60000);
+    const scannerTimer=setInterval(loadScanner,60000);
+    return()=>{clearInterval(watchTimer);clearInterval(scannerTimer);};
   },[]);
 
   useEffect(()=>{
-    setLoading(true);
-    fetch(`${API}/api/stock/${symbol}?period=${period}`)
-      .then(r=>r.json()).then(setStock).finally(()=>setLoading(false));
+    loadStock(true);
+    const stockTimer=setInterval(()=>{
+      if(document.visibilityState==='visible')loadStock(false);
+    },15000);
+    return()=>clearInterval(stockTimer);
   },[symbol,period]);
 
   useEffect(()=>{loadSignals();},[horizon]);
@@ -126,7 +156,6 @@ export default function Home(){
       }
 
       setPushToken(token);
-      // Tokeni backend'e kaydet; bundan sonra otomatik alarmlar bu telefona gelir.
       try{
         await fetch(`${API}/api/push/register`,{
           method:'POST',
@@ -202,7 +231,7 @@ export default function Home(){
             <span>•</span>
             <span>{dataAge==null?'Gecikme: —':`Gecikme: ${Number(dataAge).toFixed(1)} dk`}</span>
             <span>•</span>
-            <b style={{color:dataStatusColor}}>{dataStatus}</b>
+            <b style={{color:dataStatusColor}}>{dataStatus}</b><span>•</span><span>Otomatik yenileme: 15 sn</span>
           </div>
         </div>
       </section>
@@ -218,11 +247,13 @@ export default function Home(){
           <div className="panel heroCard"><div><span className="muted">{symbol}</span><div className="bigPrice">{stock?.price?.toFixed?.(2) ?? '—'} ₺</div><div className={change>=0?'green':'red'}>{change>=0?'+':''}{change.toFixed(2)}%</div></div><div className="stateBox"><span>Genel Durum</span><b style={{color:stateColor}}>{state}</b></div><div className="scoreBar"><i style={{width:`${score*10}%`,background:stateColor}}/></div><div className="scoreText"><span>Teknik Skor</span><b style={{color:stateColor}}>{score.toFixed?.(1) ?? score}/10</b></div><button className="saveSignalBtn" onClick={saveCurrentSignal} disabled={signalBusy}>{signalBusy?'İşleniyor...':'Bu analizi sinyal olarak kaydet'}</button></div>
           <div className="panel"><h3>Piyasa Verileri</h3><Row k="Açılış" v={stock?.open}/><Row k="Yüksek" v={stock?.high}/><Row k="Düşük" v={stock?.low}/><Row k="Kapanış" v={stock?.price}/><Row k="RSI (14)" v={last?.rsi}/><Row k="EMA 20" v={last?.ema20}/><Row k="EMA 50" v={last?.ema50}/><Row k="EMA 200" v={last?.ema200}/><Row k="ATR (14)" v={last?.atr}/></div>
           <div className="panel"><h3>Teknik Seviyeler</h3><Row k="● Destek" v={stock?.support} green/><Row k="● Direnç" v={stock?.resistance} red/></div>
+          <div className="panel"><h3>Hacim Kalitesi</h3><Row k="Hacim Skoru" v={stock?.volume_analysis?.score}/><Row k="RVOL" v={stock?.volume_analysis?.rvol}/><Row k="MFI" v={stock?.volume_analysis?.mfi}/><Row k="CMF" v={stock?.volume_analysis?.cmf}/><p className="reason">• {stock?.volume_analysis?.state ?? '—'}</p>{stock?.volume_analysis?.reasons?.slice(0,3).map((r:string)=><p className="reason" key={r}>• {r}</p>)}</div>
+          <div className="panel"><h3>Piyasa Rejimi</h3><div className="stateBox"><span>BIST yönü</span><b className={stock?.market_regime?.positive?'green':'red'}>{stock?.market_regime?.state ?? '—'}</b></div><p className="reason">{stock?.market_regime?.reason ?? 'Endeks verisi bekleniyor'}</p><div className="stateBox"><span>V4 teyit</span><b className={stock?.v4_signal==='GÜÇLÜ TEKNİK TEYİT'?'green':''}>{stock?.v4_signal ?? '—'}</b></div></div>
           <div className="panel"><h3>Kısa Teknik Yorum</h3>{stock?.technical?.reasons?.slice(0,5).map((r:string)=><p className="reason" key={r}>• {r}</p>)}</div>
         </aside>
       </div>
 
-      <div className="metricGrid"><Metric k="Teknik Skor" v={`${score.toFixed?.(1) ?? score}/10`}/><Metric k="RSI" v={fmt(last?.rsi)}/><Metric k="Hacim Oranı" v={last?.vol_ratio==null?'—':`${Number(last.vol_ratio).toFixed(2)}x`}/><Metric k="ATR" v={fmt(last?.atr)}/><Metric k="Destek" v={fmt(stock?.support)}/><Metric k="Direnç" v={fmt(stock?.resistance)}/></div>
+      <div className="metricGrid"><Metric k="Teknik Skor" v={`${score.toFixed?.(1) ?? score}/10`}/><Metric k="Hacim Skoru" v={stock?.volume_analysis?.score==null?'—':`${Number(stock.volume_analysis.score).toFixed(1)}/10`}/><Metric k="RVOL" v={last?.rvol==null?'—':`${Number(last.rvol).toFixed(2)}x`}/><Metric k="MFI" v={fmt(last?.mfi)}/><Metric k="CMF" v={last?.cmf==null?'—':Number(last.cmf).toFixed(3)}/><Metric k="RSI" v={fmt(last?.rsi)}/><Metric k="ATR" v={fmt(last?.atr)}/><Metric k="Piyasa" v={stock?.market_regime?.state ?? '—'}/></div>
 
       <section className="panel scanner"><div className="sectionTitle"><div><h2>BIST 30 Fırsat Tarayıcı</h2><p>Teknik skoru yüksek hisseleri hızlıca görün.</p></div></div><div className="table"><div className="tr head"><span>Hisse</span><span>Fiyat</span><span>Değişim</span><span>Skor</span><span>RSI</span><span>Hacim</span><span>Destek</span><span>Direnç</span><span>Durum</span></div>{scan.map(x=><div className="tr" key={x.symbol} onClick={()=>{setSymbol(x.symbol);setMobileMenuOpen(false)}}><span><b>{x.symbol}</b></span><span>{x.price.toFixed(2)} ₺</span><span className={x.change_pct>=0?'green':'red'}>{x.change_pct>=0?'+':''}{x.change_pct.toFixed(2)}%</span><span>{x.score.toFixed(1)}</span><span>{x.rsi?.toFixed?.(1) ?? '—'}</span><span>{x.vol_ratio?.toFixed?.(2) ?? '—'}x</span><span>{x.support.toFixed(2)}</span><span>{x.resistance.toFixed(2)}</span><span>{x.state}</span></div>)}</div></section>
 

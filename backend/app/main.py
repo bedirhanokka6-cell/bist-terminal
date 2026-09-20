@@ -228,6 +228,9 @@ def bist30():
 
 @app.get('/api/stock/{symbol}')
 def stock(symbol: str, period: str = '1A'):
+    from .analysis_v2 import indicators_v2
+    from .analysis_v4 import volume_score_series, volume_latest_summary, market_regime_from_index
+
     symbol = symbol.upper()
     if symbol not in BIST30:
         raise HTTPException(404, 'BIST30 hissesi bulunamadı')
@@ -240,11 +243,49 @@ def stock(symbol: str, period: str = '1A'):
     t = technical_state(a)
     l = a.iloc[-1]
 
+    # V4 volume indicators on the same chart data.
+    v4 = volume_score_series(indicators_v2(d))
+    vol_summary = volume_latest_summary(indicators_v2(d))
+
+    # Market regime: try BIST100, then BIST30 index. If unavailable, do not crash stock page.
+    market_regime = {
+        'state': 'BİLİNMİYOR',
+        'score': 0,
+        'positive': False,
+        'reason': 'Endeks verisi alınamadı',
+    }
+    try:
+        idx = yf.download(
+            'XU100.IS',
+            period='1y',
+            interval='1d',
+            auto_adjust=False,
+            progress=False,
+            threads=False,
+        )
+        if idx is None or len(idx) < 60:
+            idx = yf.download(
+                'XU030.IS',
+                period='1y',
+                interval='1d',
+                auto_adjust=False,
+                progress=False,
+                threads=False,
+            )
+        if idx is not None and len(idx):
+            # yfinance can return MultiIndex even for one ticker.
+            if isinstance(idx.columns, pd.MultiIndex):
+                idx.columns = idx.columns.get_level_values(0)
+            market_regime = market_regime_from_index(idx)
+    except Exception:
+        pass
+
     support = float(a['Low'].tail(min(50, len(a))).min())
     resistance = float(a['High'].tail(min(50, len(a))).max())
 
     candles = []
     for idx, row in a.iterrows():
+        vr = v4.loc[idx] if idx in v4.index else None
         candles.append({
             'time': idx.isoformat(),
             'open': clean_num(row['Open']),
@@ -264,9 +305,26 @@ def stock(symbol: str, period: str = '1A'):
             'bb_lower': clean_num(row['BB_LOWER']),
             'atr': clean_num(row['ATR']),
             'vol_ratio': clean_num(row['VOL_RATIO']),
+            'vol_ma20': clean_num(vr['VOL_MA20_V4']) if vr is not None else None,
+            'rvol': clean_num(vr['RVOL20']) if vr is not None else None,
+            'vol_z': clean_num(vr['VOL_Z20']) if vr is not None else None,
+            'obv': clean_num(vr['OBV']) if vr is not None else None,
+            'obv_ema10': clean_num(vr['OBV_EMA10']) if vr is not None else None,
+            'mfi': clean_num(vr['MFI14']) if vr is not None else None,
+            'cmf': clean_num(vr['CMF20']) if vr is not None else None,
+            'volume_score': clean_num(vr['VOLUME_SCORE']) if vr is not None else None,
+            'prior_high20': clean_num(vr['PRIOR_HIGH20_V4']) if vr is not None else None,
+            'prior_low20': clean_num(vr['PRIOR_LOW20_V4']) if vr is not None else None,
         })
 
     freshness = data_freshness(a.index[-1])
+
+    # V4 live decision is an analysis label, not an order instruction.
+    v4_signal = (
+        'GÜÇLÜ TEKNİK TEYİT'
+        if t['score'] >= 8.25 and vol_summary['gate_passed'] and market_regime.get('positive')
+        else 'İZLE'
+    )
 
     return {
         'symbol': symbol,
@@ -278,6 +336,9 @@ def stock(symbol: str, period: str = '1A'):
         'support': support,
         'resistance': resistance,
         'technical': t,
+        'volume_analysis': vol_summary,
+        'market_regime': market_regime,
+        'v4_signal': v4_signal,
         'data_source': freshness['data_source'],
         'last_data_time': freshness['last_data_time'],
         'data_age_minutes': freshness['data_age_minutes'],
@@ -1493,5 +1554,310 @@ def backtest_v3_risk(
             'Yahoo Finance verisi kullanılır; resmi gerçek zamanlı BIST verisi değildir.',
             'Backtest geçmiş performanstır; geleceği garanti etmez.',
             'Haber/KAP katmanı bu V3 risk testinden sonra ayrı doğrulanacaktır.',
+        ],
+    }
+
+
+# ==========================================================
+# V4 GELISMIS HACIM + PIYASA REJIMI
+# ==========================================================
+
+@app.get('/api/analysis/v4/{symbol}')
+def analysis_v4_live(symbol: str):
+    from .analysis_v2 import indicators_v2, quality_score_series
+    from .analysis_v4 import volume_latest_summary, market_regime_from_index
+
+    symbol = symbol.upper().replace('.IS', '')
+    if symbol not in BIST30:
+        raise HTTPException(404, 'BIST30 içinde hisse bulunamadı')
+
+    d = load_chart(symbol, '1Y')
+    if d is None or len(d) < 220:
+        raise HTTPException(503, 'V4 analiz için yeterli veri yok')
+
+    q = quality_score_series(indicators_v2(d))
+    vol = volume_latest_summary(indicators_v2(d))
+    l = q.iloc[-1]
+
+    market = {
+        'state': 'BİLİNMİYOR',
+        'score': 0,
+        'positive': False,
+        'reason': 'Endeks verisi alınamadı',
+    }
+    try:
+        idx = yf.download('XU100.IS', period='1y', interval='1d', auto_adjust=False, progress=False, threads=False)
+        if idx is None or len(idx) < 60:
+            idx = yf.download('XU030.IS', period='1y', interval='1d', auto_adjust=False, progress=False, threads=False)
+        if isinstance(idx.columns, pd.MultiIndex):
+            idx.columns = idx.columns.get_level_values(0)
+        market = market_regime_from_index(idx)
+    except Exception:
+        pass
+
+    quality_score = float(l['QUALITY_SCORE'])
+    technical_gate = bool(l['QUALITY_GATE'])
+    signal = (
+        'GÜÇLÜ TEKNİK TEYİT'
+        if quality_score >= 8.25 and technical_gate and vol['gate_passed'] and market.get('positive')
+        else 'İZLE'
+    )
+
+    return {
+        'symbol': symbol,
+        'model': 'v4_volume_market',
+        'quality_score': round(quality_score, 2),
+        'technical_gate': technical_gate,
+        'volume': vol,
+        'market_regime': market,
+        'signal': signal,
+        'note': 'Bu teknik/hacim teyididir; yatırım tavsiyesi veya otomatik işlem emri değildir.',
+    }
+
+
+@app.get('/api/scanner/v4')
+def scanner_v4(min_quality: float = 8.25, min_volume: float = 6.0):
+    from .analysis_v2 import indicators_v2, quality_score_series
+    from .analysis_v4 import volume_latest_summary
+
+    rows = []
+    for s in BIST30:
+        try:
+            d = load_chart(s, '1Y')
+            if len(d) < 220:
+                continue
+            q = quality_score_series(indicators_v2(d))
+            vol = volume_latest_summary(indicators_v2(d))
+            l = q.iloc[-1]
+            price = float(l['Close'])
+            prev = float(q['Close'].iloc[-2])
+
+            if float(l['QUALITY_SCORE']) < min_quality:
+                continue
+            if vol['score'] < min_volume:
+                continue
+
+            rows.append({
+                'symbol': s,
+                'price': price,
+                'change_pct': ((price / prev) - 1) * 100 if prev else 0,
+                'quality_score': float(l['QUALITY_SCORE']),
+                'volume_score': vol['score'],
+                'rvol': vol['rvol'],
+                'cmf': vol['cmf'],
+                'mfi': vol['mfi'],
+                'volume_state': vol['state'],
+            })
+        except Exception:
+            continue
+
+    return sorted(rows, key=lambda x: (x['quality_score'], x['volume_score']), reverse=True)
+
+
+@app.get('/api/backtest/v4-volume')
+def backtest_v4_volume(
+    test_days: int = Query(default=504, ge=252, le=756),
+    min_quality: float = Query(default=8.25, ge=7.25, le=10.0),
+    min_volume: float = Query(default=6.0, ge=0.0, le=10.0),
+    cost_bps: int = Query(default=20, ge=0, le=100),
+    cooldown_days: int = Query(default=5, ge=1, le=20),
+):
+    """
+    V4 giriş filtresi testi.
+    Aynı veri üzerinde üç katmanı ayrı ayrı karşılaştırır:
+    1) quality_only
+    2) quality_plus_volume
+    3) quality_plus_volume_plus_market
+
+    Böylece hacim ve piyasa rejiminin gerçekten katkı sağlayıp sağlamadığı ölçülür.
+    """
+    from .analysis_v2 import indicators_v2, quality_score_series
+    from .analysis_v4 import volume_score_series
+
+    horizons = [5, 10]
+    tickers = [s + '.IS' for s in BIST30]
+    cost_pct = cost_bps / 100.0
+
+    try:
+        raw = yf.download(
+            tickers=tickers,
+            period='5y',
+            interval='1d',
+            auto_adjust=False,
+            progress=False,
+            threads=True,
+            group_by='ticker',
+        )
+    except Exception as exc:
+        raise HTTPException(503, f'V4 backtest verisi alınamadı: {exc}')
+
+    prepared = {}
+    close_map = {}
+
+    for symbol in BIST30:
+        ticker = symbol + '.IS'
+        try:
+            if isinstance(raw.columns, pd.MultiIndex):
+                if ticker not in raw.columns.get_level_values(0):
+                    continue
+                d = raw[ticker].copy()
+            else:
+                d = raw.copy()
+            d = d.dropna(subset=['Open','High','Low','Close'])
+            if len(d) < 300:
+                continue
+
+            q = quality_score_series(indicators_v2(d))
+            v = volume_score_series(q)
+            prepared[symbol] = v
+            close_map[symbol] = v['Close']
+        except Exception:
+            continue
+
+    if not prepared:
+        raise HTTPException(503, 'V4 için yeterli hisse verisi hazırlanamadı')
+
+    # Equal-weight market proxy + breadth, only using information available on each date.
+    close_df = pd.DataFrame(close_map).sort_index()
+    returns = close_df.pct_change(fill_method=None)
+    proxy = (1 + returns.mean(axis=1, skipna=True).fillna(0)).cumprod() * 100
+    proxy_ema20 = proxy.ewm(span=20, adjust=False).mean()
+    proxy_ema50 = proxy.ewm(span=50, adjust=False).mean()
+    proxy_slope5 = (proxy_ema20 / proxy_ema20.shift(5) - 1) * 100
+
+    above_ema50 = {}
+    for symbol, a in prepared.items():
+        above_ema50[symbol] = a['Close'] > a['EMA50']
+    breadth_df = pd.DataFrame(above_ema50).reindex(close_df.index)
+    breadth = breadth_df.mean(axis=1, skipna=True) * 100
+
+    market_positive = (
+        (proxy_ema20 > proxy_ema50)
+        & (proxy_slope5 > 0)
+        & (breadth >= 55)
+    )
+
+    all_dates = close_df.index
+    if len(all_dates) < test_days:
+        start_date = all_dates[0]
+    else:
+        start_date = all_dates[-test_days]
+    test_dates = all_dates[all_dates >= start_date]
+    split_date = test_dates[len(test_dates)//2]
+
+    strategies = {
+        'quality_only': [],
+        'quality_plus_volume': [],
+        'quality_plus_volume_plus_market': [],
+    }
+
+    for symbol, a in prepared.items():
+        a = a.reindex(a.index)
+        start_pos = max(220, len(a) - test_days)
+        end_pos = len(a) - max(horizons) - 1
+
+        conditions = {
+            'quality_only': (
+                a['QUALITY_GATE']
+                & (a['QUALITY_SCORE'] >= min_quality)
+            ),
+            'quality_plus_volume': (
+                a['QUALITY_GATE']
+                & (a['QUALITY_SCORE'] >= min_quality)
+                & (a['VOLUME_SCORE'] >= min_volume)
+                & a['VOLUME_GATE']
+            ),
+        }
+
+        market_on_symbol_dates = market_positive.reindex(a.index).fillna(False)
+        conditions['quality_plus_volume_plus_market'] = (
+            conditions['quality_plus_volume']
+            & market_on_symbol_dates
+        )
+
+        for name, cond in conditions.items():
+            last_event_pos = -10000
+            prev = False
+
+            for pos in range(start_pos, end_pos + 1):
+                is_on = bool(cond.iloc[pos])
+                new_event = is_on and (not prev) and (pos - last_event_pos >= cooldown_days)
+                prev = is_on
+                if not new_event:
+                    continue
+
+                entry = float(a['Close'].iloc[pos])
+                row = {
+                    'symbol': symbol,
+                    'date': pd.Timestamp(a.index[pos]),
+                    'quality_score': float(a['QUALITY_SCORE'].iloc[pos]),
+                    'volume_score': float(a['VOLUME_SCORE'].iloc[pos]),
+                    'rvol': clean_num(a['RVOL20'].iloc[pos]),
+                    'cmf': clean_num(a['CMF20'].iloc[pos]),
+                }
+
+                for h in horizons:
+                    exit_price = float(a['Close'].iloc[pos+h])
+                    row[f'ret_{h}'] = ((exit_price / entry) - 1.0) * 100.0 - cost_pct
+
+                strategies[name].append(row)
+                last_event_pos = pos
+
+    def summarize(rows):
+        out = []
+        df = pd.DataFrame(rows)
+        if df.empty:
+            return out
+        for segment_name, segment_mask in [
+            ('development', df['date'] < split_date),
+            ('validation', df['date'] >= split_date),
+        ]:
+            seg = df[segment_mask]
+            for h in horizons:
+                s = seg[f'ret_{h}'].dropna()
+                if not len(s):
+                    continue
+                out.append({
+                    'segment': segment_name,
+                    'horizon_days': h,
+                    'events': int(len(s)),
+                    'wins': int((s > 0).sum()),
+                    'losses': int((s <= 0).sum()),
+                    'success_rate_pct': round(float((s > 0).mean() * 100), 2),
+                    'avg_net_return_pct': round(float(s.mean()), 3),
+                    'median_net_return_pct': round(float(s.median()), 3),
+                })
+        return out
+
+    return {
+        'ok': True,
+        'model': 'v4_volume_market_filter',
+        'tested_symbols': len(prepared),
+        'split_date': pd.Timestamp(split_date).date().isoformat(),
+        'settings': {
+            'test_days': test_days,
+            'min_quality': min_quality,
+            'min_volume': min_volume,
+            'cost_bps': cost_bps,
+            'cooldown_days': cooldown_days,
+            'market_rule': 'equal-weight BIST30 proxy EMA20>EMA50, EMA20 slope>0, breadth>=55%',
+        },
+        'results': {
+            name: summarize(rows)
+            for name, rows in strategies.items()
+        },
+        'event_counts': {
+            name: len(rows)
+            for name, rows in strategies.items()
+        },
+        'interpretation': (
+            'Validation bölümünde quality_plus_volume ve quality_plus_volume_plus_market '
+            'quality_only modelinden daha iyi ise hacim/piyasa filtresi katkı sağlıyor demektir.'
+        ),
+        'caveats': [
+            'Current BIST30 composition geçmişe uygulanır; survivorship bias olabilir.',
+            'Piyasa filtresi current BIST30 hisselerinden oluşturulan eşit ağırlıklı proxy ve breadth kullanır.',
+            'Yahoo Finance verisi kullanılır; resmi gerçek zamanlı BIST verisi değildir.',
+            'Backtest geçmiş performanstır; geleceği garanti etmez.',
         ],
     }
